@@ -244,12 +244,8 @@ function quoteMetrics(row, setup) {
   return {bid, ask, price, spread, depth, turnover, funding, riskPct: 100 * risk / price, rr};
 }
 
-function pageInactive() {
-  return pageSuspended || document.hidden;
-}
-
 function verdict(setup, quote) {
-  if (pageInactive()) return ['WAIT', 'Page paused'];
+  if (pageSuspended) return ['WAIT', 'Page paused'];
   if (scanBusy) return ['WAIT', 'Scan in progress'];
   if (incomplete) return ['WAIT', 'Incomplete candle scan'];
   if (Date.now() >= scanClose + CANDLE_MS + CLOSE_GRACE_MS) return ['WAIT', 'Candle scan expired'];
@@ -328,7 +324,7 @@ function render(groups) {
 
 function updateCards() {
   const now = Date.now();
-  const active = !pageInactive() && navigator.onLine;
+  const active = !pageSuspended && navigator.onLine;
   const snapshot = active && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS, now) ? quoteSnapshot : null;
   const evaluated = signals.map(setup => {
     const live = active && streamedQuotes.get(setup.symbol);
@@ -394,7 +390,7 @@ function stopStream() {
 function maintainStream() {
   // The documented global futures stream matches the global REST hosts.
   if (host === 'https://api.bybit.eu' || typeof WebSocket === 'undefined' ||
-      !navigator.onLine || scanBusy || pageInactive() || !signals.length) return;
+      !navigator.onLine || scanBusy || pageSuspended || !signals.length) return;
   const now = Date.now();
   if (stream && now >= streamDeadline) {
     stopStream();
@@ -472,7 +468,7 @@ function invalidateQuotes() {
 }
 
 async function refreshQuotes() {
-  if (pageInactive() || !navigator.onLine || scanBusy || quoteRequest || !signals.length) return;
+  if (pageSuspended || !navigator.onLine || scanBusy || quoteRequest || !signals.length) return;
   const request = new AbortController();
   quoteRequest = request;
   nextQuoteAt = Date.now() + QUOTE_INTERVAL_MS;
@@ -497,7 +493,7 @@ async function refreshQuotes() {
 }
 
 async function scan() {
-  if (scanBusy || pageInactive() || !navigator.onLine) return;
+  if (scanBusy || pageSuspended || !navigator.onLine) return;
   scanBusy = true;
   invalidateQuotes();
   $('scan').disabled = true;
@@ -537,7 +533,8 @@ async function scan() {
     signals = found;
     visibleSetups = null;
     $('status').textContent = (incomplete ? 'Partial scan' : 'Scan complete') + ' · ' +
-      (done - failures) + ' / ' + eligible.length + ' contracts checked · ' + new URL(host).hostname;
+      (done - failures) + ' / ' + eligible.length + ' contracts checked · ' + new URL(host).hostname +
+      ' · ' + new Date().toLocaleTimeString();
     $('warning').textContent = incomplete ? (firstError || 'Scan timed out') + ' · Results may omit setups.' : '';
     const nextClose = close + CANDLE_MS + 2500;
     nextScanAt = incomplete ? Math.min(Date.now() + SCAN_RETRY_MS, Math.max(Date.now() + 2500, nextClose)) :
@@ -561,7 +558,7 @@ async function scan() {
 }
 
 function tick() {
-  if (pageInactive()) return;
+  if (pageSuspended) return;
   if (navigator.onLine && !scanBusy && Date.now() >= nextScanAt) {
     scan();
   } else {
@@ -596,6 +593,8 @@ if (gylexMode) {
 }
 $('scan').onclick = scan;
 document.addEventListener('visibilitychange', () => {
+  // Keep scanning in a hidden tab while the browser lets it run.
+  if (document.hidden) return;
   invalidateQuotes();
   updateCards();
   tick();

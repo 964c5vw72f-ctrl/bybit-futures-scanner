@@ -8,7 +8,7 @@ const context = vm.createContext({
   location: {search: ''},
   URLSearchParams,
   window: {addEventListener() {}},
-  navigator: {onLine: true},
+  navigator: {onLine: false},
   setInterval() {}
 });
 vm.runInContext(fs.readFileSync('docs/scanner.js', 'utf8'), context);
@@ -90,12 +90,14 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   let mode = 'healthy';
   let tick;
   class Clock extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
     static now() { return now; }
   }
   const app = vm.createContext({
-    document: {hidden: true, addEventListener() {}, getElementById: id => dom[id], createElement: element},
+    document: {hidden: true, addEventListener(name, callback) { events[name] = callback; },
+      getElementById: id => dom[id], createElement: element},
     window: {addEventListener(name, callback) { events[name] = callback; }},
-    navigator: {onLine: true},
+    navigator: {onLine: false},
     location: {search: ''},
     setInterval: callback => { tick = callback; },
     setTimeout, clearTimeout, AbortController, URL, URLSearchParams, Date: Clock,
@@ -145,7 +147,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   };
   const firstCard = () => dom.results.children[1];
   const firstVerdict = () => firstCard().children[2].textContent;
-  read('document.hidden = false');
+  read('document.hidden = false; navigator.onLine = true');
   tick();
   await settle();
   assert.match(dom.status.textContent, /Scan complete · 24 \/ 24/);
@@ -200,6 +202,14 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   await settle();
   assert.match(firstVerdict(), /^READY TO REVIEW/);
 
+  read('document.hidden = true');
+  events.visibilitychange();
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+  now += 10_000;
+  tick();
+  await settle();
+  assert.equal(read('quoteSnapshot.time'), now);
+
   expectedClose += 300_000;
   now = expectedClose + 2500;
   const previousCard = firstCard();
@@ -208,6 +218,12 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   await settle();
   assert.notEqual(firstCard(), previousCard);
   assert.equal(read('scanClose'), expectedClose);
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+
+  read('document.hidden = false');
+  events.visibilitychange();
+  assert.match(firstVerdict(), /^WAIT · Bybit quote unavailable or stale/);
+  await settle();
   assert.match(firstVerdict(), /^READY TO REVIEW/);
   mode = 'partial';
   await dom.scan.onclick();
@@ -276,7 +292,7 @@ test('GYLEX mode intersects the imported pairs with eligible Bybit perpetuals', 
   const app = vm.createContext({
     document: {hidden: true, addEventListener() {}, getElementById() { return {setAttribute() {}}; }},
     window: {addEventListener() {}},
-    navigator: {onLine: true},
+    navigator: {onLine: false},
     location: {search: '?market=gylex'},
     localStorage: {getItem() { return 'BTC/USDT ICNT/USDT SOLUSDT ETHUSDT AVAX/USDT'; }},
     setInterval() {}, setTimeout, clearTimeout, AbortController, URLSearchParams,
