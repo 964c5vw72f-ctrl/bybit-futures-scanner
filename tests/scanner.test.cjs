@@ -99,7 +99,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
         result.list = symbols.map((symbol, index) => {
           const reference = symbol.startsWith('L') ? 100.6 : 99.4;
           return {symbol, turnover24h: String(3_000_000 + index * 400_000),
-            fundingRate: mode === 'missing funding' ? '' : '-0.0001',
+            fundingRate: mode === 'missing funding' || (mode === 'only low score ready' && !['L0', 'S0'].includes(symbol)) ? '' : '-0.0001',
             bid1Price: (reference - 0.005).toFixed(3), ask1Price: (reference + 0.005).toFixed(3),
             bid1Size: '100', ask1Size: '100'};
         });
@@ -147,9 +147,18 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     assert.deepEqual(scores, [...scores].sort((a, b) => b - a));
   }
   assert.match(firstVerdict(), /^READY TO REVIEW/);
-  assert.match(dom.readiness.textContent, /^20 READY TO REVIEW/);
+  assert.match(dom.readiness.textContent, /^24 READY TO REVIEW/);
   assert.match(firstCard().children[3].children[0].textContent, /Bid 100.595 · Ask 100.605/);
   assert.match(firstCard().children[3].children[1].textContent, /^Bybit snapshot/);
+
+  mode = 'only low score ready';
+  now += 10_000;
+  tick();
+  await settle();
+  assert.match(dom.readiness.textContent, /^2 READY TO REVIEW · LONG L0 \(1\) · SHORT S0 \(1\)$/);
+  assert.equal(firstCard().dataset.symbol, 'L0');
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+  assert.equal(dom.results.children[12].dataset.symbol, 'S0');
 
   for (const [failure, reason] of [['missing funding', /Funding unavailable/],
     ['stale', /Bybit quote refresh failed/], ['HTTP failure', /Bybit quote refresh failed/]]) {

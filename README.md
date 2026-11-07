@@ -4,7 +4,7 @@
 
 ## Browser scanner
 
-GitHub Pages publishes `main:/docs`. The browser scans trading USDT perpetuals returned by a reachable official Bybit host with at least 1 million USDT in 24h turnover. A scan uses one host and one set of closed five-minute candles. Up to ten setups per side appear in descending score order, LONG first. Thin markets and incomplete or stale data cannot receive READY TO REVIEW.
+GitHub Pages publishes `main:/docs`. The browser scans trading USDT perpetuals returned by a reachable official Bybit host with at least 1 million USDT in 24h turnover. A scan uses one host and one set of closed five-minute candles. Up to ten setups per side appear with READY setups first, ordered by descending score within each group. The readiness summary counts all passing setups across the scan. Thin markets and incomplete or stale data cannot receive READY TO REVIEW.
 
 - **EARLY** means recent turnover buildup with unconfirmed momentum.
 - **WAIT** gives the reason a setup failed a screening check.

@@ -38,6 +38,7 @@ let nextScanAt = 0;
 let nextQuoteAt = 0;
 let host = null;
 let signals = [];
+let visibleSetups = [];
 let scanClose = 0;
 let incomplete = false;
 let quoteSnapshot = null;
@@ -249,10 +250,11 @@ function node(tag, content, css) {
   return el;
 }
 
-function addCard(setup, rank) {
+function addCard(setup) {
   const card = node('article');
   card.dataset.symbol = setup.symbol;
-  card.append(node('div', '#' + rank + ' · Score ' + fmt(setup.score), 'score'));
+  const rank = node('div', '', 'score');
+  card.append(rank);
   card.append(node('div', setup.symbol + ' · ' + setup.side, 'symbol ' + setup.side.toLowerCase()));
   const flag = node('p', '', 'verdict');
   const quotes = node('div', '', 'live-price');
@@ -276,45 +278,66 @@ function addCard(setup, rank) {
     node('p', 'Closed candle ' + stamp(scanClose) + ' · Close ' + fmt(setup.reference) +
       ' · 5m turnover ' + fmt(setup.candleTurnover) + ' USDT'));
   card.append(flag, quotes, levels, market, details);
-  setup.card = {flag, bidAsk, quoteTime, entry, market};
+  setup.card = {element: card, rank, flag, bidAsk, quoteTime, entry, market};
   return card;
 }
 
-function render() {
+function render(groups) {
+  const ordered = groups.flatMap(group => group.rows.map(row => row.setup));
+  if (visibleSetups && ordered.length === visibleSetups.length &&
+      ordered.every((setup, i) => setup === visibleSetups[i])) return;
+  visibleSetups = ordered;
   const results = $('results');
   results.replaceChildren();
-  for (const side of ['LONG', 'SHORT']) {
-    const list = signals.filter(setup => setup.side === side);
+  for (const {side, rows} of groups) {
     results.append(node('h2', 'Top ' + side, side.toLowerCase()));
-    if (!list.length) results.append(node('p', 'No qualifying ' + side + ' setups in this scan.', 'muted'));
-    list.forEach((setup, i) => results.append(addCard(setup, i + 1)));
+    if (!rows.length) results.append(node('p', 'No qualifying ' + side + ' candidates in this scan.', 'muted'));
+    rows.forEach(({setup}, i) => {
+      const card = setup.card?.element || addCard(setup);
+      setup.card.rank.textContent = '#' + (i + 1) + ' · Score ' + fmt(setup.score);
+      results.append(card);
+    });
   }
-  updateCards();
 }
 
 function updateCards() {
   const snapshot = !pageInactive() && navigator.onLine && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS) ? quoteSnapshot : null;
-  let readyCount = 0;
-  for (const setup of signals) {
+  const evaluated = signals.map(setup => {
     const quote = snapshot ? quoteMetrics(snapshot.rows.get(setup.symbol), setup) : null;
     const [label, reason] = verdict(setup, quote);
-    if (label === 'READY TO REVIEW') readyCount++;
-    const {flag, bidAsk, quoteTime, entry, market} = setup.card;
-    flag.textContent = label + ' · ' + reason;
-    flag.className = 'verdict ' + (label === 'READY TO REVIEW' ? 'ready' : label.toLowerCase());
-    bidAsk.textContent = quote ? 'Bid ' + priceText(quote.bid) + ' · Ask ' + priceText(quote.ask) : 'Bid — · Ask —';
-    quoteTime.textContent = quote ? 'Bybit snapshot ' + stamp(snapshot.time) : 'No fresh bid/ask';
-    entry.textContent = quote ? priceText(quote.price) : '—';
-    market.textContent = quote ? 'R:R 1:' + fmt(quote.rr) + ' · Spread ' + fmt(quote.spread) +
-      '% · Funding ' + fmt(quote.funding * 100) + '% · 24h turnover ' + fmt(quote.turnover) +
-      ' USDT · Top-of-book ' + fmt(quote.depth) + ' USDT' : '';
+    return {setup, quote, label, reason};
+  });
+  const ready = evaluated.filter(row => row.label === 'READY TO REVIEW');
+  const other = evaluated.filter(row => row.label !== 'READY TO REVIEW');
+  const groups = ['LONG', 'SHORT'].map(side => ({
+    side,
+    rows: [...ready, ...other].filter(row => row.setup.side === side).slice(0, 10)
+  }));
+  if (scanClose) render(groups);
+  for (const {rows} of groups) {
+    for (const {setup, quote, label, reason} of rows) {
+      const {flag, bidAsk, quoteTime, entry, market} = setup.card;
+      flag.textContent = label + ' · ' + reason;
+      flag.className = 'verdict ' + (label === 'READY TO REVIEW' ? 'ready' : label.toLowerCase());
+      bidAsk.textContent = quote ? 'Bid ' + priceText(quote.bid) + ' · Ask ' + priceText(quote.ask) : 'Bid — · Ask —';
+      quoteTime.textContent = quote ? 'Bybit snapshot ' + stamp(snapshot.time) : 'No fresh bid/ask';
+      entry.textContent = quote ? priceText(quote.price) : '—';
+      market.textContent = quote ? 'R:R 1:' + fmt(quote.rr) + ' · Spread ' + fmt(quote.spread) +
+        '% · Funding ' + fmt(quote.funding * 100) + '% · 24h turnover ' + fmt(quote.turnover) +
+        ' USDT · Top-of-book ' + fmt(quote.depth) + ' USDT' : '';
+    }
   }
   const readiness = $('readiness');
-  const text = scanBusy ? 'Checking for setups…' : readyCount ?
-    readyCount + ' READY TO REVIEW · Bybit checks passed' :
-    '0 READY TO REVIEW · No displayed setup passes the Bybit checks right now';
+  const readySides = ['LONG', 'SHORT'].map(side => {
+    const matches = ready.filter(row => row.setup.side === side);
+    return side + ' ' + (matches.length ? matches[0].setup.symbol + ' (' + matches.length + ')' : '0');
+  });
+  const text = scanBusy ? 'Checking for setups…' : ready.length ?
+    ready.length + ' READY TO REVIEW · ' + readySides.join(' · ') :
+    '0 READY TO REVIEW · ' + (!scanClose || incomplete || (signals.length && !snapshot) ?
+      'Waiting for complete, fresh Bybit data' : 'No LONG or SHORT passed all Bybit checks');
   if (readiness.textContent !== text) readiness.textContent = text;
-  readiness.className = readyCount ? 'ready' : 'muted';
+  readiness.className = ready.length ? 'ready' : 'muted';
 }
 
 function invalidateQuotes() {
@@ -387,15 +410,17 @@ async function scan() {
     scanClose = close;
     quoteIssue = '';
     found.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
-    signals = ['LONG', 'SHORT'].flatMap(side => found.filter(row => row.side === side).slice(0, 10));
+    signals = found;
+    visibleSetups = null;
     $('status').textContent = (incomplete ? 'Partial scan' : 'Scan complete') + ' · ' +
       (done - failures) + ' / ' + eligible.length + ' contracts checked · ' + new URL(host).hostname;
     $('warning').textContent = incomplete ? (firstError || 'Scan timed out') + ' · Results may omit setups.' : '';
     const nextClose = close + CANDLE_MS + 2500;
     nextScanAt = incomplete ? Math.min(Date.now() + SCAN_RETRY_MS, Math.max(Date.now() + 2500, nextClose)) :
       Math.max(Date.now() + 2500, nextClose);
-    render();
   } catch (error) {
+    scanClose = 0;
+    visibleSetups = [];
     signals = [];
     $('results').replaceChildren();
     $('status').textContent = 'Scan unavailable · retrying automatically';
