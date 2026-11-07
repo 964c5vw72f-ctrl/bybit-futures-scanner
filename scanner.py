@@ -7,25 +7,26 @@ import time
 import urllib.parse
 import urllib.request
 
-BASE = "https://api.bybit.com"
+BASES = ["https://api.bybit.com", "https://api.bytick.com", "https://api.bybit.nl", "https://api.bybit-tr.com"]
 HEADERS = {"User-Agent": "bybit-public-futures-scanner/1.0"}
 TOP_N = int(os.getenv("TOP_N", "60"))
 WORKERS = 5
 
 def get(path, params):
-    url = BASE + path + "?" + urllib.parse.urlencode(params)
-    for attempt in range(3):
+    """Try official Bybit API domains; never replace blocked data with estimates."""
+    failures = []
+    for base in BASES:
+        url = base + path + "?" + urllib.parse.urlencode(params)
         try:
             req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=18) as response:
+            with urllib.request.urlopen(req, timeout=12) as response:
                 obj = json.load(response)
             if obj.get("retCode") != 0:
                 raise RuntimeError(str(obj.get("retMsg")))
             return obj["result"]
-        except Exception:
-            if attempt == 2:
-                raise
-            time.sleep(1.5 * (attempt + 1))
+        except Exception as exc:
+            failures.append(f"{base}: {type(exc).__name__}: {exc}")
+    raise RuntimeError("All official Bybit API hosts failed. " + " | ".join(failures))
 
 def active_symbols():
     found, cursor = set(), None
