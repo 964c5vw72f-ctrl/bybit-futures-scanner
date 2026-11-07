@@ -26,3 +26,7 @@ python3 -m http.server 8000 --directory docs
 ## GitHub Actions
 
 The workflow runs code checks on pushes and pull requests. Manual **Run workflow** also runs the optional Python candle watchlist and uploads a timestamped `output/latest.json` artifact. This is a separate candle-only report with up to ten candidates per side. It may fail when Bybit denies the runner's requests. It does not supply data to the browser page.
+
+## iPhone app
+
+See [the iOS build and TestFlight instructions](ios/README.md).

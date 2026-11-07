@@ -1,0 +1,41 @@
+name: iOS build
+on:
+  push:
+    branches: [main]
+    paths: ['ios/**', '.github/workflows/ios.yml']
+  pull_request:
+    paths: ['ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          xcodebuild -version
+          command -v xcodegen || brew install xcodegen
+          xcodegen generate
+      - name: Build for iPhone Simulator
+        run: |
+          xcodebuild -project ios/FuturesScanner.xcodeproj -scheme FuturesScanner \
+            -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/DerivedData CODE_SIGNING_ALLOWED=NO build
+      - name: Launch app in Simulator
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          devices = json.load(sys.stdin)["devices"]
+          print(next(d["udid"] for runtime in sorted(devices, reverse=True) if "iOS" in runtime
+                     for d in devices[runtime] if d["name"].startswith("iPhone")))
+          ')
+          xcrun simctl boot "$device"
+          xcrun simctl bootstatus "$device" -b
+          xcrun simctl install "$device" ios/DerivedData/Build/Products/Debug-iphonesimulator/FuturesScanner.app
+          xcrun simctl launch "$device" com.stavrosavraam.futuresscanner
