@@ -2,7 +2,7 @@
 *{box-sizing:border-box}body{margin:0;background:#0b1020;color:#edf2ff;font:16px -apple-system,BlinkMacSystemFont,Arial,sans-serif}main{max-width:780px;margin:auto;padding:24px 16px 80px}h1{font-size:28px;margin:10px 0}h2{font-size:20px;margin:30px 0 14px}.muted{color:#a8b4cc;line-height:1.55}.bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0}button{background:#4385ee;color:white;border:0;border-radius:12px;padding:13px 18px;font-weight:700;font-size:16px}article{background:#172137;border:1px solid #354460;border-radius:18px;padding:18px;margin:14px 0}.head{display:flex;justify-content:space-between;gap:10px;align-items:center}.symbol{font-size:23px;font-weight:800;overflow-wrap:anywhere}.long{color:#74e2b1}.short{color:#ff939b}.score{color:#9ec6ff;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:18px 0}.metrics div{min-width:0}.metrics small{display:block;color:#a8b4cc}.metrics strong{font-size:17px;overflow-wrap:anywhere}.notice{padding:12px 0;color:#ffc17b}details{margin-top:12px;color:#a8b4cc}summary{color:#9ec6ff;cursor:pointer}@media(max-width:360px){.metrics strong{font-size:14px}}
 </style></head><body><main><h1>Bybit Futures Scanner</h1><p class="muted">Public market data · No account access · TOP 10: LONG first, SHORT second. Scheduled scans are not real-time signals.</p><div class="bar"><button id="refresh">Refresh data</button><span id="status" class="muted">Loading…</span></div><div id="warning" class="notice" role="status"></div><div id="results"></div><p class="muted">Entry is a reference from the last completed 5-minute candle, not an executable quote. Stop and target are preliminary technical levels. Prices can move rapidly. No automated trades or guarantees. Verify current Bybit bid/ask, spread and order-book liquidity before any decision.</p></main><script>
 const $=id=>document.getElementById(id);
-let lastSignals=[];
+let lastSignals=[];let scanAge=Infinity;let lastLoadAt=Date.now();
 async function refreshQuotes(signals,age){
  lastSignals=signals;
  if(age>30)return;
@@ -44,7 +44,8 @@ async function load(){
   if(!response.ok)throw Error('No published scan yet (HTTP '+response.status+')');
   const d=await response.json();const date=new Date(d.generated_utc);
   if(!Number.isFinite(date.getTime()))throw Error('Invalid scan timestamp');
-  const age=(Date.now()-date.getTime())/60000;
+  const age=(Date.now()-date.getTime())/60000;scanAge=age;lastLoadAt=Date.now();
+  if(d.scan_status==='FAILED'||(d.errors||[]).length===d.scanned_symbols&&d.scanned_symbols>0){$('status').textContent='SCAN FAILED';$('warning').textContent='Bybit market data unavailable. No verified candidates. Check GitHub Actions logs.';$('results').innerHTML='';lastSignals=[];return;}
   $('status').textContent='Scan: '+date.toLocaleString()+' · '+d.scanned_symbols+' checked · '+(d.errors||[]).length+' errors';
   $('warning').textContent=age>30?'STALE DATA — last scan is '+Math.round(age)+' minutes old. Do not treat these as current entry signals.':'Quotes are not live. Results are from the latest scheduled scan.';
   const signals=(d.signals||[]).filter(x=>(x.side==='LONG'||x.side==='SHORT')&&Number(x.score)>0&&Number(x.stop)>0&&Number(x.target)>0).sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).slice(0,10);
@@ -56,5 +57,5 @@ async function load(){
   await refreshQuotes(signals,age);
  }catch(e){$('status').textContent='Scan unavailable';$('warning').textContent=String(e.message);$('results').innerHTML='';}
 }
-$('refresh').addEventListener('click',load);load();setInterval(load,60000);setInterval(()=>{if(lastSignals.length&&document.visibilityState==='visible')refreshQuotes(lastSignals,0)},10000);
+$('refresh').addEventListener('click',load);load();setInterval(load,60000);setInterval(()=>{if(lastSignals.length&&document.visibilityState==='visible')refreshQuotes(lastSignals,scanAge+(Date.now()-lastLoadAt)/60000)},10000);
 </script></body></html>
