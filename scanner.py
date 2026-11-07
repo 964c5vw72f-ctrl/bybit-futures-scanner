@@ -122,8 +122,23 @@ def analyze(ticker):
 
 def main():
     started = dt.datetime.now(dt.timezone.utc).isoformat()
-    valid = active_symbols()
-    tickers = get("/v5/market/tickers", {"category": "linear"}).get("list", [])
+    try:
+        valid = active_symbols()
+        tickers = get("/v5/market/tickers", {"category": "linear"}).get("list", [])
+    except Exception as exc:
+        report = {
+            "generated_utc": started, "source": "Bybit public V5 REST API",
+            "market": "USDT linear perpetual", "eligible_symbols": 0,
+            "scanned_symbols": 0, "signals": [],
+            "errors": [{"symbol": "MARKET_API", "error": str(exc)}],
+            "scan_status": "FAILED",
+            "disclaimer": "Market data unavailable; no signals. Never treat previous signals as current."
+        }
+        os.makedirs("output", exist_ok=True)
+        with open("output/latest.json", "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2)
+        print(json.dumps(report, indent=2))
+        return
     eligible = [t for t in tickers if t["symbol"] in valid
                 and float(t.get("turnover24h") or 0) >= 1000000]
     eligible.sort(key=lambda t: float(t.get("turnover24h") or 0), reverse=True)
@@ -143,7 +158,7 @@ def main():
         "generated_utc": started, "source": "Bybit public V5 REST API",
         "market": "USDT linear perpetual", "eligible_symbols": len(eligible),
         "scanned_symbols": len(candidates), "signals": results[:10],
-        "errors": errors, "disclaimer": "Watchlist only; not a trade instruction. "
+        "errors": errors, "scan_status": "FAILED" if errors and len(errors) == len(candidates) else ("PARTIAL" if errors else "OK"), "disclaimer": "Watchlist only; not a trade instruction. "
         "No orders are placed. No signal guarantees profit."
     }
     os.makedirs("output", exist_ok=True)
@@ -153,7 +168,7 @@ def main():
     if not results:
         print("No qualifying setups at this scan; do not force a trade.")
     if errors and len(errors) == len(candidates):
-        raise RuntimeError("All market requests failed; scan unreliable")
+        print("WARNING: All market requests failed; published status FAILED with no valid signals.")
 
 if __name__ == "__main__":
     main()
