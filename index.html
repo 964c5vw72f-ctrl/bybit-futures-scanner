@@ -1,63 +1,65 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b1020"><title>Bybit Futures Scanner</title><style>
-*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#edf2ff;font:16px -apple-system,BlinkMacSystemFont,Arial,sans-serif}main{max-width:780px;margin:auto;padding:24px 16px 80px}h1{font-size:28px;margin:10px 0}h2{font-size:20px;margin:30px 0 14px}.muted{color:#a8b4cc;line-height:1.55}.bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0}button{background:#4385ee;color:white;border:0;border-radius:12px;padding:13px 18px;font-weight:700;font-size:16px}article{background:#172137;border:1px solid #354460;border-radius:18px;padding:18px;margin:14px 0}.head{display:flex;justify-content:space-between;gap:10px;align-items:center}.symbol{font-size:23px;font-weight:800;overflow-wrap:anywhere}.long{color:#74e2b1}.short{color:#ff939b}.score{color:#9ec6ff;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:18px 0}.metrics div{min-width:0}.metrics small{display:block;color:#a8b4cc}.metrics strong{font-size:17px;overflow-wrap:anywhere}.notice{padding:12px 0;color:#ffc17b}details{margin-top:12px;color:#a8b4cc}summary{color:#9ec6ff;cursor:pointer}@media(max-width:360px){.metrics strong{font-size:14px}}
-</style></head><body><main><h1>Bybit Futures Scanner</h1><p class="muted">Public market data · No account access · TOP 10: LONG first, SHORT second. Scheduled scans are not real-time signals.</p><div class="bar"><button id="refresh">Refresh data</button><span id="status" class="muted">Loading…</span></div><div id="warning" class="notice" role="status"></div><div id="results"></div><p class="muted">Entry is a reference from the last completed 5-minute candle, not an executable quote. Stop and target are preliminary technical levels. Prices can move rapidly. No automated trades or guarantees. Verify current Bybit bid/ask, spread and order-book liquidity before any decision.</p></main><script>
-const $=id=>document.getElementById(id);
-let lastSignals=[];let scanAge=Infinity;let lastLoadAt=Date.now();
-async function refreshQuotes(signals,age){
- lastSignals=signals;
- if(age>30){document.querySelectorAll('.livequote').forEach(el=>{el.textContent='STALE SCAN · WAIT';el.style.color='#ffc17b';});return;}
+*{box-sizing:border-box}body{background:#0b1020;color:#edf2ff;margin:0;font:16px -apple-system,BlinkMacSystemFont,Arial,sans-serif}main{max-width:760px;margin:auto;padding:24px 16px 80px}h1{font-size:28px}h2{margin-top:30px}.muted{color:#a8b4cc;line-height:1.5}button{background:#4385ee;color:white;border:0;border-radius:12px;padding:14px 20px;font-size:16px;font-weight:bold}button:disabled{opacity:.55}article{background:#172137;border:1px solid #354460;border-radius:18px;padding:18px;margin:14px 0}.head{display:flex;justify-content:space-between;align-items:center;gap:10px}.symbol{font-size:22px;font-weight:800;overflow-wrap:anywhere}.long{color:#74e2b1}.short{color:#ff939b}.score{color:#9ec6ff;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:18px 0}.metrics small{display:block;color:#a8b4cc}.metrics strong{font-size:17px;overflow-wrap:anywhere}.wait{color:#ffc17b}.ready{color:#74e2b1}.bad{color:#ff939b}details{margin-top:12px;color:#a8b4cc}summary{color:#9ec6ff;cursor:pointer}@media(max-width:360px){.metrics strong{font-size:14px}}
+</style></head><body><main><h1>Bybit Futures Scanner</h1><p class="muted">Direct public Bybit API · No keys · No login · No orders. TOP 10: LONG first, SHORT second. Scan runs while this page is open.</p><button id="scan">Scan now</button><p id="status" class="muted">Starting…</p><p id="warning" class="wait"></p><div id="results"></div><p class="muted">Quotes refresh every 10 seconds while the page is visible. Indicators use only closed 5-minute candles. Watchlist, not a trading instruction. If data is unavailable, no candidate is marked ready.</p></main><script>
+const $=id=>document.getElementById(id),fmt=n=>Number(n).toLocaleString('en-US',{maximumSignificantDigits:7}),safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let scanning=false,signals=[],scanAt=0,quoteAt=0,scanErrors=0;
+async function api(path,params){
+ const u='https://api.bybit.com/v5/market/'+path+'?'+new URLSearchParams(params);
+ const c=new AbortController(),tm=setTimeout(()=>c.abort(),9000);
+ try{const r=await fetch(u,{cache:'no-store',signal:c.signal});if(!r.ok)throw Error('Bybit HTTP '+r.status);const d=await r.json();if(d.retCode!==0)throw Error(d.retMsg||'Bybit error');return d.result;}finally{clearTimeout(tm);}
+}
+function rsi(closes,n){if(closes.length<n+1)return null;const dif=closes.slice(1).map((v,i)=>v-closes[i]);let g=0,l=0;for(let i=0;i<n;i++){g+=Math.max(0,dif[i]);l+=Math.max(0,-dif[i]);}g/=n;l/=n;for(let i=n;i<dif.length;i++){g=(g*(n-1)+Math.max(0,dif[i]))/n;l=(l*(n-1)+Math.max(0,-dif[i]))/n;}return l===0?(g?100:50):100-100/(1+g/l);}
+async function analyze(t){
+ const d=await api('kline',{category:'linear',symbol:t.symbol,interval:'5',limit:45});
+ const now=Date.now(),rows=(d.list||[]).filter(x=>Number(x[0])+300000<=now).sort((a,b)=>Number(a[0])-Number(b[0]));
+ if(rows.length<25)return null;
+ const c=rows.map(x=>Number(x[4])),v=rows.map(x=>Number(x[6])),hi=rows.map(x=>Number(x[2])),lo=rows.map(x=>Number(x[3]));
+ const p=c.at(-1),mom=100*(p/c.at(-4)-1),avg=v.slice(-21,-1).reduce((a,b)=>a+b,0)/20,vr=avg?v.at(-1)/avg:0,r6=rsi(c,6),r14=rsi(c,14);
+ let side=null;
+ if(mom>.35&&vr>=1.4&&r6>=52&&r6<=78&&r14>=50&&mom<=4.5)side='LONG';
+ else if(mom<-.35&&vr>=1.4&&r6>=22&&r6<=48&&r14<=50&&mom>=-4.5)side='SHORT';
+ if(!side)return null;
+ const t5=c.at(-1)>c.at(-2)?'UP':'DOWN',t15=c.at(-1)>c.at(-4)?'UP':'DOWN';
+ if(t5!==t15||t5!==(side==='LONG'?'UP':'DOWN'))return null;
+ const stop=side==='LONG'?Math.min(...lo.slice(-7)):Math.max(...hi.slice(-7)),risk=Math.abs(p-stop);
+ if((side==='LONG'&&stop>=p)||(side==='SHORT'&&stop<=p)||risk/p<.001||risk/p>.045)return null;
+ const target=side==='LONG'?p+2*risk:p-2*risk;if(target<=0)return null;
+ return {symbol:t.symbol,side,score:Math.round((Math.abs(mom)*2+Math.min(vr,6)*2)*10)/10,reference:p,stop,target,mom,vr,r6,r14,t5,t15,turnover:Number(t.turnover24h),candleTime:Number(rows.at(-1)[0])+300000,confirmed:true};
+}
+function render(){
+ const list=signals.slice().sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).slice(0,10);
+ if(!list.length){$('results').innerHTML='<p class="muted">No qualifying momentum candidates in this scan. No trade signal.</p>';return;}
+ $('results').innerHTML=['LONG','SHORT'].map(side=>{const items=list.filter(x=>x.side===side);return items.length?'<h2 class="'+side.toLowerCase()+'">'+side+' candidates</h2>'+items.map(x=>'<article data-symbol="'+safe(x.symbol)+'"><div class="score">#'+(list.indexOf(x)+1)+' · Score '+fmt(x.score)+'</div><div class="head"><span class="symbol">'+safe(x.symbol)+'</span><b class="'+side.toLowerCase()+'">'+side+'</b></div><p class="wait verdict">WAIT · Checking live bid/ask</p><div class="metrics"><div><small>Live entry</small><strong class="entry">—</strong></div><div><small>Stop*</small><strong>'+fmt(x.stop)+'</strong></div><div><small>Target*</small><strong>'+fmt(x.target)+'</strong></div></div><p class="muted quote">Last closed candle '+fmt(x.reference)+'</p><details><summary>More indicators</summary><p>RSI6 '+fmt(x.r6)+' · RSI14 '+fmt(x.r14)+' · Volume ×'+fmt(x.vr)+' · Momentum '+fmt(x.mom)+'% · Trend '+x.t5+'/'+x.t15+'</p><p>Closed candle '+new Date(x.candleTime).toLocaleString()+' · 24h turnover $'+fmt(x.turnover)+'</p></details></article>').join(''):'';}).join('');
+}
+async function quotes(){
+ if(!signals.length||document.visibilityState!=='visible')return;
  try{
-  const controller=new AbortController();
-  const timeout=setTimeout(()=>controller.abort(),6500);
-  const response=await fetch('https://api.bybit.com/v5/market/tickers?category=linear',{cache:'no-store',signal:controller.signal});
-  clearTimeout(timeout);
-  if(!response.ok)throw Error('HTTP '+response.status);
-  const data=await response.json();
-  if(data.retCode!==0)throw Error(data.retMsg||'Bybit error');
-  const bySymbol=new Map((data.result?.list||[]).map(t=>[t.symbol,t]));
-  const time=new Date().toLocaleTimeString();
-  document.querySelectorAll('article[data-symbol]').forEach(card=>{
-    const x=signals.find(s=>s.symbol===card.dataset.symbol);
-    const t=bySymbol.get(card.dataset.symbol);
-    const label=card.querySelector('.livequote');
-    if(!x||!t||!label)return;
-    const bid=Number(t.bid1Price),ask=Number(t.ask1Price),entry=x.side==='LONG'?ask:bid;
-    const stop=Number(x.stop),target=Number(x.target);
-    const risk=x.side==='LONG'?entry-stop:stop-entry;
-    const reward=x.side==='LONG'?target-entry:entry-target;
-    const spread=100*(ask-bid)/((ask+bid)/2);
-    const rr=risk>0?reward/risk:0;
-    const confirmed=x.stage==='CONFIRMED'&&x.confirmed===true;
-    const good=confirmed&&entry>0&&risk>0&&reward>0&&rr>=1.5&&spread<=0.2;
-    const reason=!confirmed?'UNCONFIRMED':(!good?'PRICE / R:R CHECK':'READY TO REVIEW');
-    label.textContent='Bybit '+(x.side==='LONG'?'ask':'bid')+' '+fmt(entry)+' · '+time+' · R:R 1:'+rr.toFixed(2)+' · '+(good?'READY TO REVIEW':'WAIT · '+reason);
-    label.style.color=good?'#74e2b1':'#ffc17b';
-  });
- }catch(e){
-  document.querySelectorAll('.livequote').forEach(el=>{el.textContent='Live quote unavailable — do not trade using reference price';el.style.color='#ffc17b';});
+ const d=await api('tickers',{category:'linear'}),m=new Map((d.list||[]).map(t=>[t.symbol,t]));quoteAt=Date.now();
+ for(const card of document.querySelectorAll('article[data-symbol]')){
+  const x=signals.find(s=>s.symbol===card.dataset.symbol),t=m.get(x.symbol),v=card.querySelector('.verdict'),e=card.querySelector('.entry'),q=card.querySelector('.quote');
+  if(!t){v.textContent='WAIT · Quote unavailable';v.className='wait verdict';continue;}
+  const bid=Number(t.bid1Price),ask=Number(t.ask1Price),entry=x.side==='LONG'?ask:bid,spread=100*(ask-bid)/((ask+bid)/2),risk=x.side==='LONG'?entry-x.stop:x.stop-entry,reward=x.side==='LONG'?x.target-entry:entry-x.target,rr=risk>0?reward/risk:0,age=Date.now()-scanAt;
+  const good=age<360000&&x.confirmed&&entry>0&&bid>0&&ask>0&&ask>=bid&&spread<=.2&&risk>0&&reward>0&&rr>=1.5&&Math.abs(entry/x.reference-1)<=.005;
+  e.textContent=entry>0?fmt(entry):'—';v.textContent=good?'READY TO REVIEW':'WAIT · '+(age>=360000?'SCAN EXPIRED':rr<1.5?'PRICE / R:R CHECK':spread>.2?'SPREAD TOO WIDE':Math.abs(entry/x.reference-1)>.005?'PRICE MOVED':'QUOTE CHECK');
+  v.className=(good?'ready':'wait')+' verdict';q.textContent='Bybit '+(x.side==='LONG'?'ask':'bid')+' '+fmt(entry)+' · R:R 1:'+fmt(rr)+' · Spread '+fmt(spread)+'% · '+new Date(quoteAt).toLocaleTimeString();
  }
+ }catch(e){for(const card of document.querySelectorAll('article[data-symbol]')){const v=card.querySelector('.verdict');v.textContent='WAIT · Live Bybit quote unavailable';v.className='wait verdict';card.querySelector('.entry').textContent='—';} $('warning').textContent='Live quote request failed: '+e.message;}
 }
-const fmt=n=>Number(n).toLocaleString('en-US',{maximumSignificantDigits:7});
-const safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-async function load(){
- $('status').textContent='Fetching latest published scan…';
+async function scan(){
+ if(scanning)return;scanning=true;$('scan').disabled=true;$('warning').textContent='';$('status').textContent='Fetching current Bybit markets…';
  try{
-  const response=await fetch('./output/latest.json?t='+Date.now(),{cache:'no-store'});
-  if(!response.ok)throw Error('No published scan yet (HTTP '+response.status+')');
-  const d=await response.json();const date=new Date(d.generated_utc);
-  if(!Number.isFinite(date.getTime()))throw Error('Invalid scan timestamp');
-  const age=(Date.now()-date.getTime())/60000;scanAge=age;lastLoadAt=Date.now();
-  if(d.scan_status==='FAILED'||(d.errors||[]).length===d.scanned_symbols&&d.scanned_symbols>0){$('status').textContent='SCAN FAILED';$('warning').textContent='Bybit market data unavailable. No verified candidates. Check GitHub Actions logs.';$('results').innerHTML='';lastSignals=[];return;}
-  $('status').textContent='Scan: '+date.toLocaleString()+' · '+d.scanned_symbols+' checked · '+(d.errors||[]).length+' errors';
-  $('warning').textContent=age>30?'STALE DATA — last scan is '+Math.round(age)+' minutes old. Do not treat these as current entry signals.':'Quotes are not live. Results are from the latest scheduled scan.';
-  const signals=(d.signals||[]).filter(x=>(x.side==='LONG'||x.side==='SHORT')&&Number(x.score)>0&&Number(x.stop)>0&&Number(x.target)>0).sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).slice(0,10);
-  if(!signals.length){$('results').innerHTML='<p>No qualifying candidates in the last scan. Do not force a trade.</p>';return;}
-  $('results').innerHTML=['LONG','SHORT'].map(side=>{
-   const list=signals.filter(x=>x.side===side);
-   return list.length?'<h2 class="'+side.toLowerCase()+'">'+side+' candidates</h2>'+list.map((x,i)=>'<article><div class="score">#'+(signals.indexOf(x)+1)+' · Score '+fmt(x.score)+'</div><div class="head"><span class="symbol">'+safe(x.symbol)+'</span><strong class="'+side.toLowerCase()+'">'+side+'</strong></div><p class="muted">WATCH / UNCONFIRMED · WAIT</p><div class="metrics"><div><small>Reference</small><strong>'+fmt(x.entry_reference)+'</strong></div><div><small>Stop*</small><strong>'+fmt(x.stop)+'</strong></div><div><small>Target*</small><strong>'+fmt(x.target)+'</strong></div></div><div class="muted">Model R:R 1:2 · 5m/15m '+safe(x.trend5)+'/'+safe(x.trend15)+'</div><details><summary>More indicators</summary><p>RSI6 '+fmt(x.rsi6)+' · RSI14 '+fmt(x.rsi14)+' · Volume ×'+fmt(x.volume_ratio)+' · 15m '+fmt(x.momentum_15m_pct)+'% · 24h turnover $'+fmt(x.turnover24h_usdt)+'</p><p>Closed candle: '+safe(x.candle_close_utc)+'</p></details></article>').join(''):'';
-  }).join('');
-  await refreshQuotes(signals,age);
- }catch(e){$('status').textContent='Scan unavailable';$('warning').textContent=String(e.message);$('results').innerHTML='';}
+  const [ins,ticks]=await Promise.all([api('instruments-info',{category:'linear',limit:1000,status:'Trading'}),api('tickers',{category:'linear'})]);
+  const valid=new Set((ins.list||[]).filter(x=>x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading').map(x=>x.symbol));
+  let cursor=ins.nextPageCursor;while(cursor){const page=await api('instruments-info',{category:'linear',limit:1000,status:'Trading',cursor});for(const x of page.list||[])if(x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading')valid.add(x.symbol);if(!page.nextPageCursor||page.nextPageCursor===cursor)break;cursor=page.nextPageCursor;}
+  const eligible=(ticks.list||[]).filter(t=>valid.has(t.symbol)&&Number(t.turnover24h)>=1000000);
+  if(!eligible.length)throw Error('No eligible contracts returned');
+  const out=[];let done=0,errors=0,next=0;const workers=Array.from({length:8},async()=>{while(next<eligible.length){const t=eligible[next++];try{const x=await analyze(t);if(x)out.push(x);}catch(e){errors++;}done++;if(done%15===0)$('status').textContent='Scanning '+done+'/'+eligible.length+' contracts · '+errors+' request errors';}});
+  await Promise.all(workers);scanErrors=errors;scanAt=Date.now();signals=out.sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).slice(0,10);
+  $('status').textContent='Scan completed '+new Date(scanAt).toLocaleTimeString()+' · '+done+' contracts · '+out.length+' signals · '+errors+' errors';
+  if(errors)$('warning').textContent='PARTIAL SCAN: '+errors+' market requests failed. Results may omit candidates.';
+  render();await quotes();
+ }catch(e){signals=[];scanAt=0;$('results').innerHTML='';$('status').textContent='SCAN FAILED';$('warning').textContent=e.message+' — no verified candidates.';}
+ finally{scanning=false;$('scan').disabled=false;}
 }
-$('refresh').addEventListener('click',load);load();setInterval(load,60000);setInterval(()=>{if(lastSignals.length&&document.visibilityState==='visible')refreshQuotes(lastSignals,scanAge+(Date.now()-lastLoadAt)/60000)},10000);
+$('scan').onclick=scan;scan();setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)quotes();},10000);setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)scan();},300000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-scanAt>300000)scan();else quotes();}});
 </script></body></html>
