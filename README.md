@@ -1,31 +1,26 @@
 # Bybit Futures Scanner
 
-Free, read-only USDT perpetual futures watchlist scanner using Bybit's **public V5 API**. No API keys, no exchange login, no orders.
+[Open the scanner](https://964c5vw72f-ctrl.github.io/bybit-futures-scanner/) in Safari on iPhone. To create a shortcut, use **Share → Add to Home Screen**. The free page starts scanning when opened. It uses Bybit's public V5 market endpoints with no API keys, account login or orders.
 
-## How to run from iPhone
+## Browser scanner
 
-1. Open this GitHub repository and tap **Actions**.
-2. Select **Bybit Futures Scan**, then **Run workflow**.
-3. Open the latest completed run. View the **Scan public Bybit futures** log, or download the JSON artifact.
-4. GitHub Actions is also scheduled every 15 minutes (GitHub may delay or skip scheduled runs).
+GitHub Pages publishes `main:/docs`. The browser scans trading USDT perpetuals returned by a reachable official Bybit host with at least 1 million USDT in 24h turnover. A scan uses one host and one set of closed five-minute candles. Up to ten setups per side appear in descending score order, LONG first. Thin markets and incomplete or stale data cannot receive READY TO REVIEW.
 
-## What it checks
+- **EARLY** means recent turnover buildup with unconfirmed momentum.
+- **WAIT** gives the reason a setup failed a screening check.
+- **READY TO REVIEW** requires aligned 5m and 15m momentum, volume and RSI confirmation, complete fresh data, and passing quote checks.
 
-- All currently trading Bybit USDT linear perpetual instruments for eligibility
-- Top 60 eligible instruments by 24h turnover, minimum 1 million USDT turnover
-- Last **closed** 5-minute candles: RSI(6), RSI(14), 15-minute price momentum, turnover spike vs previous 20 candles
-- LONG WATCH / SHORT WATCH ranked by a simple heuristic score
+The quote panel uses actual Bybit best bid and ask with the exchange API response timestamp. Quotes refresh every ten seconds and the full scan runs after each five-minute candle closes while the page is visible. The displayed R:R uses ask for LONG or bid for SHORT against candle-derived stop and target estimates. It excludes execution costs. Scores rank heuristic setups and do not measure win probability. If Bybit does not serve public futures to the device's network, the scanner reports the failure and retries.
 
-This is a **scanner, not a live tick-by-tick feed**. Results are timestamped and may be delayed. Scores are not probabilities. False positives and rapid reversals are common. The scanner does not account for funding, spread, order book, slippage, liquidation risk, or news. Never use it alone to justify leveraged trades.
+## Local checks
 
-## Run locally
-
-```bash
-python3 scanner.py
+```sh
+node --check docs/scanner.js
+node --test tests/scanner.test.cjs
+python3 -m py_compile scanner.py
+python3 -m http.server 8000 --directory docs
 ```
 
-No third-party packages required. Public repository contains no credentials. If Bybit blocks GitHub-hosted requests in the runner's region, the workflow will fail rather than silently invent data.
+## GitHub Actions
 
-## Output
-
-`output/latest.json` in each run's artifact and the job logs. GitHub-hosted public runners and free Actions minutes are subject to GitHub's current limits.
+The workflow runs code checks on pushes and pull requests. Manual **Run workflow** also runs the optional Python candle watchlist and uploads a timestamped `output/latest.json` artifact. This is a separate candle-only report with up to ten candidates per side. It may fail when Bybit denies the runner's requests. It does not supply data to the browser page.

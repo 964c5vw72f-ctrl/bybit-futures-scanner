@@ -2,12 +2,14 @@
 import concurrent.futures
 import datetime as dt
 import json
+import math
 import os
 import time
 import urllib.parse
 import urllib.request
 
-BASES = ["https://api.bybit.com", "https://api.bytick.com", "https://api.bybit.nl", "https://api.bybit-tr.com"]
+BASES = ["https://api.bybit.com", "https://api.bytick.com", "https://api.bybit.eu"]
+CANDLE_MS = 300_000
 HEADERS = {"User-Agent": "bybit-public-futures-scanner/1.0"}
 TOP_N = int(os.getenv("TOP_N", "0"))
 WORKERS = 12
@@ -23,13 +25,15 @@ def get(path, params):
                 obj = json.load(response)
             if obj.get("retCode") != 0:
                 raise RuntimeError(str(obj.get("retMsg")))
+            if abs(time.time() * 1000 - int(obj["time"])) >= 25_000:
+                raise RuntimeError("Stale Bybit response timestamp")
             return obj["result"]
         except Exception as exc:
             failures.append(f"{base}: {type(exc).__name__}: {exc}")
     raise RuntimeError("All official Bybit API hosts failed. " + " | ".join(failures))
 
 def active_symbols():
-    found, cursor = set(), None
+    found, cursor, seen = set(), None, set()
     while True:
         args = {"category": "linear", "limit": 1000, "status": "Trading"}
         if cursor:
@@ -37,12 +41,16 @@ def active_symbols():
         result = get("/v5/market/instruments-info", args)
         for item in result.get("list", []):
             if (item.get("quoteCoin") == "USDT"
+                and item.get("settleCoin") == "USDT"
                 and item.get("contractType") == "LinearPerpetual"
                 and item.get("status") == "Trading"):
                 found.add(item["symbol"])
         new_cursor = result.get("nextPageCursor")
-        if not new_cursor or new_cursor == cursor:
+        if not new_cursor:
             break
+        if new_cursor in seen:
+            raise RuntimeError("Repeated instrument page cursor")
+        seen.add(new_cursor)
         cursor = new_cursor
     return found
 
@@ -61,19 +69,28 @@ def rsi(closes, period=14):
         return 100.0 if avg_gain else 50.0
     return 100 - 100 / (1 + avg_gain / avg_loss)
 
-def analyze(ticker):
+def analyze(ticker, candle_close):
     symbol = ticker["symbol"]
     result = get("/v5/market/kline", {
-        "category": "linear", "symbol": symbol, "interval": "5", "limit": 45
+        "category": "linear", "symbol": symbol, "interval": "5", "limit": 45, "end": candle_close - 1
     })
     rows = sorted(result.get("list", []), key=lambda x: int(x[0]))
-    # Exclude current unclosed 5-minute candle.
-    now_ms = int(time.time() * 1000)
-    rows = [x for x in rows if int(x[0]) + 300000 <= now_ms]
+    if not rows or int(rows[-1][0]) + CANDLE_MS != candle_close:
+        raise RuntimeError("Latest closed candle missing")
+    if any(int(row[0]) != candle_close - (len(rows) - i) * CANDLE_MS
+           for i, row in enumerate(rows)):
+        raise RuntimeError("Missing or duplicated candle")
+    closes = [float(x[4]) for x in rows]
+    volumes = [float(x[6]) for x in rows]
+    highs = [float(x[2]) for x in rows]
+    lows = [float(x[3]) for x in rows]
+    if not all(math.isfinite(value) for value in closes + volumes + highs + lows):
+        raise RuntimeError("Invalid candle values")
+    if any(not 0 < low <= close <= high or volume < 0
+           for low, close, high, volume in zip(lows, closes, highs, volumes)):
+        raise RuntimeError("Invalid candle geometry or volume")
     if len(rows) < 25:
         return None
-    closes = [float(x[4]) for x in rows]
-    volumes = [float(x[6]) for x in rows]  # turnover in quote currency
     price = closes[-1]
     if not price or closes[-4] <= 0:
         return None
@@ -92,8 +109,6 @@ def analyze(ticker):
         return None
     score = round(abs(momentum) * 2 + min(ratio, 6) * 2, 2)
     long_side = direction.startswith("LONG")
-    highs = [float(x[2]) for x in rows]
-    lows = [float(x[3]) for x in rows]
     stop = min(lows[-7:]) if long_side else max(highs[-7:])
     risk = (price - stop) if long_side else (stop - price)
     if risk <= 0 or risk / price > 0.045 or risk / price < 0.001:
@@ -101,7 +116,7 @@ def analyze(ticker):
     target = price + 2 * risk if long_side else price - 2 * risk
     if target <= 0:
         return None
-    trend5 = "UP" if closes[-1] > closes[-2] else "DOWN"
+    trend5 = "UP" if closes[-1] > closes[-2] else "DOWN" if closes[-1] < closes[-2] else "FLAT"
     trend15 = "UP" if closes[-1] > closes[-4] else "DOWN"
     if trend5 != trend15 or trend5 != ("UP" if long_side else "DOWN"):
         return None
@@ -122,9 +137,14 @@ def analyze(ticker):
 
 def main():
     started = dt.datetime.now(dt.timezone.utc).isoformat()
+    candle_close = (int(time.time() * 1000) - 2000) // CANDLE_MS * CANDLE_MS
     try:
         valid = active_symbols()
         tickers = get("/v5/market/tickers", {"category": "linear"}).get("list", [])
+        eligible = [t for t in tickers if t["symbol"] in valid
+                    and float(t.get("turnover24h") or 0) >= 1000000]
+        if not eligible:
+            raise RuntimeError("No eligible USDT perpetuals returned")
     except Exception as exc:
         report = {
             "generated_utc": started, "source": "Bybit public V5 REST API",
@@ -139,13 +159,11 @@ def main():
             json.dump(report, f, indent=2)
         print(json.dumps(report, indent=2))
         return
-    eligible = [t for t in tickers if t["symbol"] in valid
-                and float(t.get("turnover24h") or 0) >= 1000000]
     eligible.sort(key=lambda t: float(t.get("turnover24h") or 0), reverse=True)
     candidates = eligible[:TOP_N] if TOP_N > 0 else eligible
     results, errors = [], []
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        jobs = {pool.submit(analyze, t): t["symbol"] for t in candidates}
+        jobs = {pool.submit(analyze, t, candle_close): t["symbol"] for t in candidates}
         for future in concurrent.futures.as_completed(jobs):
             try:
                 item = future.result()
@@ -153,11 +171,13 @@ def main():
                     results.append(item)
             except Exception as exc:
                 errors.append({"symbol": jobs[future], "error": str(exc)})
-    results.sort(key=lambda x: (not x["signal"].startswith("LONG"), -x["score"]))
+    results.sort(key=lambda x: (-x["score"], x["symbol"]))
+    ranked = [item for side in ("LONG", "SHORT")
+              for item in [row for row in results if row["side"] == side][:10]]
     report = {
         "generated_utc": started, "source": "Bybit public V5 REST API",
         "market": "USDT linear perpetual", "eligible_symbols": len(eligible),
-        "scanned_symbols": len(candidates), "signals": results[:10],
+        "scanned_symbols": len(candidates) - len(errors), "signals": ranked,
         "errors": errors, "scan_status": "FAILED" if errors and len(errors) == len(candidates) else ("PARTIAL" if errors else "OK"), "disclaimer": "Watchlist only; not a trade instruction. "
         "No orders are placed. No signal guarantees profit."
     }

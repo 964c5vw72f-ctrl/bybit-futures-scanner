@@ -1,56 +1,54 @@
 name: Bybit Futures Scan
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+
 permissions:
-  contents: write
-concurrency:
-  group: futures-scan
-  cancel-in-progress: false
+  contents: read
+
 jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: node --check docs/scanner.js && node --test tests/scanner.test.cjs
+      - run: python -m py_compile scanner.py
+
   scan:
+    if: github.event_name == 'workflow_dispatch'
+    needs: checks
     runs-on: ubuntu-latest
     timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - name: Scan official public Bybit futures
         run: python scanner.py
-      - name: Publish latest results to GitHub Pages source
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add output/latest.json
-          if ! git diff --cached --quiet; then
-            git commit -m "Update published Bybit futures scan [skip ci]"
-            for attempt in 1 2 3; do
-              git pull --rebase origin main && git push origin HEAD:main && break
-              if [ "$attempt" -eq 3 ]; then echo 'Publishing failed after 3 attempts'; exit 1; fi
-              sleep 5
-            done
-          fi
       - name: Upload scan artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bybit-scan-${{ github.run_id }}
           path: output/latest.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 7
-      - name: Fail workflow when scan data unavailable
-        if: always()
+      - name: Verify scan status
         run: |
           python - <<'PY'
-          import json,sys
-          try:
-              with open('output/latest.json', encoding='utf-8') as f: d=json.load(f)
-          except Exception as e:
-              sys.exit(f'Scan output missing: {e}')
-          status=d.get('scan_status','UNKNOWN')
-          print(f'Scan status: {status}; scanned: {d.get("scanned_symbols")}; errors: {len(d.get("errors",[]))}')
-          for e in d.get('errors',[])[:3]: print('ERROR:',e)
-          if status != 'OK': sys.exit(f'Scan incomplete: {status}; refusing to report success')
+          import json
+          with open('output/latest.json', encoding='utf-8') as f:
+              data = json.load(f)
+          if data['scan_status'] != 'OK':
+              raise SystemExit(f"Bybit market scan incomplete: {data['scan_status']}. See scan artifact.")
           PY

@@ -1,142 +1,33 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Bybit Scanner"><meta name="theme-color" content="#0c111d"><title>Bybit Futures Scanner</title><style>body{background:#0c111d;color:#edf2ff;font:16px system-ui;margin:0;padding:22px}main{max-width:900px;margin:auto}button{background:#3b82f6;color:white;border:0;border-radius:10px;padding:14px 20px;font-weight:700;font-size:16px}button:disabled{opacity:.5}small,p{color:#aab5ce}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:10px 5px;border-bottom:1px solid #30394d;text-align:left}th{color:#aab5ce}.long{color:#69e5a5}.short{color:#ff8a8a}#status{white-space:pre-wrap}a{color:#8cbdff} .signals{display:grid;gap:14px;margin-top:16px}.signal{background:#151e30;border:1px solid #33415b;border-radius:16px;padding:16px}.signal h2{font-size:20px;margin:0}.signal .top{display:flex;align-items:center;justify-content:space-between;gap:8px}.signal .tag{font-weight:800;font-size:13px;padding:7px 10px;border-radius:8px;background:#26354b}.signal .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:16px 0}.signal .metric{min-width:0}.signal .metric small{display:block;font-size:12px}.signal .metric strong{font-size:17px;overflow-wrap:anywhere}.signal .verdict{font-weight:700;margin:8px 0}.signal .details{color:#aab5ce;font-size:13px;line-height:1.7}.signal .more{margin-top:10px}.signal summary{color:#8cbdff;cursor:pointer}.signal .more div{padding-top:8px}.section{font-size:19px;margin:22px 0 8px}.signal .sub{color:#aab5ce;font-size:12px;margin-top:5px}@media(min-width:680px){.signals{grid-template-columns:repeat(2,minmax(0,1fr))}} </style><main><h1>Bybit Futures Scanner</h1><p>Runs directly in your iPhone browser using Bybit public market data. No login, API keys, or trades. Scans automatically while this browser page is open; it does not run when the page is closed.</p><button id="go">Scan now</button> <span id="stamp"></span><p id="status">Tap Scan now to check connectivity.</p><div id="results" class="signals"></div><p><small>Only closed 5-minute candles; liquidity threshold $1m 24h; checks all eligible USDT perpetual contracts (may take several minutes). READY TO REVIEW means screening criteria pass, not that a trade should be opened. WAIT means more confirmation or a better quote is needed. READY TO REVIEW and WAIT watch candidates are displayed; AVOID is hidden. WAIT is not an entry signal. No signal is a guarantee. TOP 10 excludes extended and negative-score setups, and requires a valid refreshed Bybit quote and positive live R:R. Only READY TO REVIEW candidates pass the stricter entry screen; WAIT candidates are watch-only. Entry quote uses ask for LONG and bid for SHORT; stop and target remain candle-derived, so live R:R is not automatically 1:2. TOP 10 shows up to ten eligible signals, with LONG first, SHORT second, and score descending within each direction. If the quote is missing, spread exceeds 0.2%, or the quote has moved more than the smaller of 0.5% and half the initial stop distance, the entry is marked WAIT. Quotes refresh automatically every 10 seconds while this page is open and visible; the full indicator scan refreshes approximately every five minutes while the page remains open. A failed refresh marks quotes stale. Only the ten highest ranked eligible signals are displayed. Unconfirmed signals are always marked WAIT. Ranking combines confirmation, stage, score and stop distance. *Entry/stop/target are indicative levels from the last closed 5m candle, recent swing and 14-candle average true range, NOT live executable quotes. Target uses 2 times initial stop distance (1:2 before fees, slippage and funding). Entry check is a screening flag, not a trading instruction. Recheck current bid/ask, spread, contract tick size and order book before placing any order. Stop orders can slip and liquidation may occur before a stop at high leverage. Confirmation requires aligned 5m/15m proxy trends, RSI, volume and 15m price momentum; it is not a guarantee. Early detection uses recent volume buildup with limited price movement; this is not predictive. Trend compares the last closed 5m price against 30m and 45m ago (a proxy, not independent 15m candle confirmation). Liquidity is 24h turnover in USD. EARLY / DEVELOPING / EXTENDED are heuristic labels, not predictions. Score is a relative ranking, not a win probability. No signal is a trade recommendation. Market prices may move before you act. If Bybit blocks browser requests or CORS, the scanner shows an error rather than invented results.</small></p></main><script>
-const hosts=['https://api.bybit.com','https://api.bytick.com'];
-const status=document.querySelector('#status'),go=document.querySelector('#go'),out=document.querySelector('#results');
-let latestSignals=[],lastScanText='',quoteRefreshing=false,lastFullScan=0;
-const entryEligible=x=>x.confirmation==='MOMENTUM CONFIRMED'&&x.stage!=='EXTENDED'&&x.score>=0&&x.baseEntryCheck==='REVIEW ENTRY'&&x.trend5===(x.side.startsWith('LONG')?'UP':'DOWN')&&x.trend15===(x.side.startsWith('LONG')?'UP':'DOWN');
-function rankLive(){
- // Show up to ten valid, scored watch candidates even when none meets the stricter entry criteria.
- // Never present WAIT as a ready-to-trade signal.
- const candidates=latestSignals.filter(x=>x.decision!=='AVOID'&&x.stage!=='EXTENDED'&&x.score>=0&&Number.isFinite(x.livePrice)&&x.livePrice>0&&Number.isFinite(x.liveRR)&&x.liveRR>0)
- .sort((a,b)=>Number(b.side.startsWith('LONG'))-Number(a.side.startsWith('LONG'))||Number(b.decision==='READY TO REVIEW')-Number(a.decision==='READY TO REVIEW')||b.score-a.score).slice(0,10);
- out.replaceChildren();
- let previous='';
- for(let i=0;i<candidates.length;i++){
-  const x=candidates[i],section=x.side.startsWith('LONG')?'LONG':'SHORT';
-  if(section!==previous){const h=document.createElement('h2');h.className='section';h.textContent=section==='LONG'?'▲ LONG candidates':'▼ SHORT candidates';out.append(h);previous=section}
-  if(x.element){
-   let rank=x.element.querySelector('.rank-label');
-   if(!rank){rank=document.createElement('div');rank.className='rank-label';rank.style.cssText='font-weight:800;color:#8cbdff;margin-bottom:8px';x.element.prepend(rank)}
-   rank.textContent='#'+(i+1)+' · Score '+x.score.toFixed(1);
-   out.append(x.element);
-  }
- }
- if(!candidates.length){const p=document.createElement('p');p.textContent='No candidates with valid quotes and positive risk/reward right now. Scanning continues while the page is open.';out.append(p)}
-}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Bybit Scanner">
+<title>Bybit Futures Scanner</title>
+<style>
 
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function api(path,params){const qs=new URLSearchParams(params).toString(),errors=[];for(const host of hosts){try{const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),10000);let resp;try{resp=await fetch(host+path+'?'+qs,{signal:ctrl.signal})}finally{clearTimeout(timer)}if(!resp.ok)throw Error('HTTP '+resp.status);const j=await resp.json();if(j.retCode!==0)throw Error(j.retMsg);return j.result}catch(e){errors.push(host+': '+e.message)}}throw Error(errors.join(' | '))}
-function rsi(a,n){if(a.length<=n)return null;const d=a.slice(1).map((v,i)=>v-a[i]);let g=0,l=0;for(let i=0;i<n;i++){g+=Math.max(d[i],0)/n;l+=Math.max(-d[i],0)/n}for(let i=n;i<d.length;i++){g=(g*(n-1)+Math.max(d[i],0))/n;l=(l*(n-1)+Math.max(-d[i],0))/n}return l===0?(g?100:50):100-100/(1+g/l)}
-async function scan(t){const d=await api('/v5/market/kline',{category:'linear',symbol:t.symbol,interval:'5',limit:45});const rows=d.list.sort((a,b)=>Number(a[0])-Number(b[0])).filter(x=>Number(x[0])+300000<=Date.now());if(rows.length<25)return null;const c=rows.map(x=>Number(x[4])),high=rows.map(x=>Number(x[2])),low=rows.map(x=>Number(x[3])),v=rows.map(x=>Number(x[6])),m=100*(c.at(-1)/c.at(-4)-1),vol=v.at(-1)/(v.slice(-21,-1).reduce((a,b)=>a+b,0)/20||1),r6=rsi(c,6),r14=rsi(c,14);let side=m>.35&&vol>=1.4&&r6>=52&&r6<=85&&r14>=50?'LONG WATCH':m<-.35&&vol>=1.4&&r6>=15&&r6<=48&&r14<=50?'SHORT WATCH':null;const prevVol=v.slice(-7,-2).reduce((a,b)=>a+b,0)/5||1;const recentVol=v.slice(-3).reduce((a,b)=>a+b,0)/3;const buildup=recentVol/prevVol;const earlyLong=m>=0&&m<=0.7&&r6>=48&&r6<=67&&r14>=45&&r14<=62&&buildup>=1.3;const earlyShort=m<=0&&m>=-0.7&&r6>=33&&r6<=52&&r14>=38&&r14<=55&&buildup>=1.3;if(!side){if(earlyLong)side='LONG WATCH';else if(earlyShort)side='SHORT WATCH';else return null;}
-const isLong=side.startsWith('LONG');
-const trend5=c.at(-1)>c.at(-7)?'UP':'DOWN';
-const trend15=c.at(-1)>c.at(-10)?'UP':'DOWN';
-const aligned=isLong?(trend5==='UP'&&trend15==='UP'):(trend5==='DOWN'&&trend15==='DOWN');
-const liquidity=Number(t.turnover24h);
-const extended=isLong?(r6>=75||r14>=70||m>=2):(r6<=25||r14<=30||m<=-2);
-const early=isLong?(r6>=52&&r6<=68&&r14>=50&&r14<=63&&m<=1.5):(r6>=32&&r6<=48&&r14>=37&&r14<=50&&m>=-1.5);
-const reversal=!aligned;const stage=(earlyLong&&isLong)||(earlyShort&&!isLong)?'EARLY':extended?'EXTENDED':early?'EARLY':'DEVELOPING';
-const volumeScore=Math.min(vol,5)*2;
-const momentumScore=Math.min(Math.abs(m),1.5)*2;
-const rsiScore=early?4:extended?-5:1;
-const score=Math.round((volumeScore+momentumScore+rsiScore+(aligned?3:-3)+Math.min(liquidity/10000000,3)+(stage==='EARLY'?6:stage==='EXTENDED'?-8:0)+Math.min(buildup,3))*10)/10;
-const ranges=c.map((z,i)=>i?Math.max(high[i]-low[i],Math.abs(high[i]-c[i-1]),Math.abs(low[i]-c[i-1])):high[i]-low[i]);const atr=ranges.slice(-14).reduce((a,b)=>a+b,0)/14;
-const entry=c.at(-1);const swing=isLong?Math.min(...low.slice(-7)):Math.max(...high.slice(-7));
-const stop=isLong?Math.min(swing,entry-1.2*atr):Math.max(swing,entry+1.2*atr);
-const risk=Math.abs(entry-stop);const target=isLong?entry+2*risk:entry-2*risk;
-const riskPct=100*risk/entry;
-const exhausted=extended||r6>78||r6<22||Math.abs(m)>2||Math.abs(c.at(-1)-c.at(-4))>2.5*atr;
-const entryCheck=exhausted?'EXTENDED / WAIT':!aligned?'TREND CONFLICT / WAIT':riskPct>5?'WIDE STOP / WAIT':riskPct<0.15?'TIGHT STOP / WAIT':'REVIEW ENTRY';
-const fmt=n=>Number(n.toPrecision(7)).toString();
-const confirmation=aligned&&((isLong&&m>0.35&&r6>=52&&r14>=50)||(!isLong&&m<-.35&&r6<=48&&r14<=50))&&vol>=1.4?'MOMENTUM CONFIRMED':reversal?'REVERSAL / UNCONFIRMED':'WATCH / UNCONFIRMED';const verifiedEntry=confirmation==='MOMENTUM CONFIRMED'&&entryCheck==='REVIEW ENTRY';const finalEntryCheck=verifiedEntry?'REVIEW ENTRY':entryCheck==='REVIEW ENTRY'?'UNCONFIRMED / WAIT':entryCheck;const group=reversal?'REVERSAL':confirmation==='MOMENTUM CONFIRMED'?'CONFIRMED MOMENTUM':stage==='EARLY'?(isLong?'EARLY LONG':'EARLY SHORT'):'MATURE MOVE';return {symbol:t.symbol,side,stage,group,confirmation,trend5,trend15,liquidity,price:c.at(-1),m,vol,r6,r14,score,entry,stop,target,riskPct,entryCheck:finalEntryCheck,verifiedEntry,fmt}}
-go.onclick=async()=>{latestSignals=[];go.disabled=true;lastFullScan=Date.now();out.replaceChildren();status.textContent='Contacting Bybit public API…';try{const instruments=new Set();let cursor='';do{const q={category:'linear',limit:1000,status:'Trading'};if(cursor)q.cursor=cursor;const d=await api('/v5/market/instruments-info',q);for(const x of d.list)if(x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading')instruments.add(x.symbol);cursor=d.nextPageCursor||''}while(cursor);const t=(await api('/v5/market/tickers',{category:'linear'})).list.filter(x=>instruments.has(x.symbol)&&Number(x.turnover24h)>=1000000).sort((a,b)=>Number(b.turnover24h)-Number(a.turnover24h));const found=[],errors=[];for(let i=0;i<t.length;i+=5){status.textContent='Scanning '+Math.min(i+5,t.length)+' / '+t.length+' contracts…';const batch=await Promise.all(t.slice(i,i+5).map(x=>scan(x).catch(e=>{errors.push(x.symbol+': '+e.message);return null})));found.push(...batch.filter(Boolean));await sleep(200)}const quality=x=>(x.verifiedEntry?100:0)+(x.confirmation==='MOMENTUM CONFIRMED'?25:0)+(x.stage==='EARLY'?10:x.stage==='DEVELOPING'?5:0)+x.score-Math.max(0,x.riskPct-2)*3;
-const long=found.filter(x=>x.side.startsWith('LONG')).sort((a,b)=>quality(b)-quality(a));
-const short=found.filter(x=>!x.side.startsWith('LONG')).sort((a,b)=>quality(b)-quality(a));
-const top=[];
-// Refresh quotes after the candle scan; never use old candle entry as a live quote.
-let quoteError='';let quoteTime=null;let quotes=new Map();
-try{const q=await api('/v5/market/tickers',{category:'linear'});quoteTime=new Date();quotes=new Map(q.list.map(z=>[z.symbol,z]));}catch(e){quoteError=e.message}
-for(const x of found){const q=quotes.get(x.symbol);const bid=Number(q?.bid1Price),ask=Number(q?.ask1Price);
-x.baseEntryCheck=x.baseEntryCheck||((x.entryCheck==='REVIEW LIVE ENTRY'||x.entryCheck==='REVIEW ENTRY')?'REVIEW ENTRY':x.entryCheck);
-x.livePrice=x.side.startsWith('LONG')?ask:bid;
-x.spreadPct=100*(ask-bid)/((ask+bid)/2);
-const move=Math.abs(x.livePrice-x.entry)/x.entry*100;
-const adverse=x.side.startsWith('LONG')?x.livePrice>x.entry:x.livePrice<x.entry;
-const wrongSide=x.side.startsWith('LONG')?x.livePrice<=x.stop:x.livePrice>=x.stop;
-const valid=Number.isFinite(bid)&&Number.isFinite(ask)&&bid>0&&ask>=bid;
-if(!valid){x.entryCheck='QUOTE UNAVAILABLE / WAIT';x.verifiedEntry=false}
-else if(wrongSide||move>Math.min(0.5,x.riskPct*0.5)||x.spreadPct>0.2){x.entryCheck='PRICE MOVED / WAIT';x.verifiedEntry=false}
-else if(x.verifiedEntry){x.entryCheck='REVIEW LIVE ENTRY'}
-}
-// Executable quote-based risk/reward: preserve the candle-derived stop and target.
-for(const x of found){
- const isLong=x.side.startsWith('LONG'),p=x.livePrice;
- const risk=isLong?p-x.stop:x.stop-p;
- const reward=isLong?x.target-p:p-x.target;
- x.liveRisk=risk;x.liveReward=reward;
- x.liveRR=Number.isFinite(p)&&risk>0&&reward>0?reward/risk:NaN;
- x.liveRiskPct=Number.isFinite(p)&&p>0?100*risk/p:NaN;
- if(!Number.isFinite(x.liveRR)||x.liveRR<1.5||x.liveRiskPct<0.15||x.liveRiskPct>5){
-  x.verifiedEntry=false;
-  if(x.entryCheck==='REVIEW LIVE ENTRY')x.entryCheck='LIVE R:R / WAIT';
- }
-}
-if(quoteError){for(const x of found){x.entryCheck='QUOTE UNAVAILABLE / WAIT';x.verifiedEntry=false}}
-// Ranking is performed after live quote checks, using LONG first then SHORT.
-// Three-way assessment is a screening label, never a trading instruction.
-for(const x of found){
- const invalidQuote=!Number.isFinite(x.livePrice)||x.livePrice<=0;
- const invalidGeometry=!Number.isFinite(x.liveRR)||x.liveRisk<=0||x.liveReward<=0;
- const unsafe=invalidQuote||invalidGeometry||x.stage==='EXTENDED'||x.score<0||['EXTENDED / WAIT','WIDE STOP / WAIT','TIGHT STOP / WAIT','TREND CONFLICT / WAIT'].includes(x.baseEntryCheck);
- x.decision=unsafe?'AVOID':x.verifiedEntry&&entryEligible(x)?'READY TO REVIEW':'WAIT';
-}
-latestSignals=found;
-for(const x of found){const tr=document.createElement('article');tr.className='signal';tr.dataset.symbol=x.symbol;x.element=tr;const title=document.createElement('div');title.className='top';const name=document.createElement('h2');name.textContent=x.symbol;const tag=document.createElement('span');tag.className='tag '+(x.side.startsWith('LONG')?'long':'short');tag.textContent=x.side.startsWith('LONG')?'▲ LONG':'▼ SHORT';title.append(name,tag);tr.append(title);
-const sub=document.createElement('div');sub.className='sub';sub.textContent=x.stage+' · '+x.confirmation;tr.append(sub);
-const verdict=document.createElement('div');verdict.className='verdict';verdict.textContent='◉ '+x.decision;verdict.style.color='#69e5a5';tr.append(verdict);
-const metrics=document.createElement('div');metrics.className='metrics';for(const [label,value] of [['Live Bybit entry*',Number.isFinite(x.livePrice)&&x.livePrice>0?x.fmt(x.livePrice):'Unavailable'],['Stop*',x.fmt(x.stop)],['Target*',x.fmt(x.target)]]){const cell=document.createElement('div');cell.className='metric';const l=document.createElement('small');l.textContent=label;const val=document.createElement('strong');val.textContent=value;if(label==='Live Bybit entry*')val.className='live-entry';cell.append(l,val);metrics.append(cell)}tr.append(metrics);
-const info=document.createElement('div');info.className='details live-details';info.textContent=(Number.isFinite(x.livePrice)?'Quote '+x.fmt(x.livePrice)+' · ':'Quote unavailable · ')+'Live R:R '+(Number.isFinite(x.liveRR)?'1:'+x.liveRR.toFixed(2):'N/A')+' · Score '+x.score.toFixed(1)+' · '+x.trend5+'/'+x.trend15;tr.append(info);
-const details=document.createElement('details');details.className='more';const summary=document.createElement('summary');summary.textContent='More indicators';const extra=document.createElement('div');extra.className='details';extra.textContent='Price '+x.price+' · 15m '+x.m.toFixed(2)+'% · Volume '+x.vol.toFixed(2)+'× · RSI6 '+x.r6.toFixed(1)+' · RSI14 '+x.r14.toFixed(1)+' · 24h turnover $'+(x.liquidity/1000000).toFixed(1)+'M · Risk distance '+x.riskPct.toFixed(2)+'% · '+x.group;details.append(summary,extra);tr.append(details)}
-rankLive();document.querySelector('#stamp').textContent=new Date().toLocaleTimeString();status.textContent=(quoteTime?'Quotes checked '+quoteTime.toLocaleTimeString()+'. ':'Quote refresh failed. ' )+'Scanned '+t.length+' contracts. '+found.length+' watch signals. '+errors.length+' request errors.'+(errors.length?' First error: '+errors[0]:'')+(found.length?'':' No qualifying setup; do not force a trade.');lastScanText=status.textContent}catch(e){status.textContent='Cannot access Bybit from this browser: '+e.message+'. If this is CORS or HTTP 403, a permitted data source or execution environment is required.'}finally{go.disabled=false}};
+*{box-sizing:border-box}body{background:#0b1020;color:#edf2ff;margin:0;font:16px -apple-system,BlinkMacSystemFont,Arial,sans-serif}main{max-width:760px;margin:auto;padding:24px 16px 80px}h1{font-size:28px}h2{margin-top:30px}.muted{color:#a8b4cc;line-height:1.5}button{background:#4385ee;color:white;border:0;border-radius:12px;padding:14px 20px;font-size:16px;font-weight:bold}button:disabled{opacity:.55}article{background:#172137;border:1px solid #354460;border-radius:18px;padding:18px;margin:14px 0}.head{display:flex;justify-content:space-between;align-items:center;gap:10px}.symbol{font-size:22px;font-weight:800;overflow-wrap:anywhere}.long{color:#74e2b1}.short{color:#ff939b}.score{color:#9ec6ff;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:18px 0}.metrics small{display:block;color:#a8b4cc}.metrics strong{font-size:17px;overflow-wrap:anywhere}.live-price{margin:12px 0 2px;padding:12px;border:1px solid #354460;border-radius:12px}.live-price small{display:block;color:#a8b4cc}.live-price strong{font-size:21px;overflow-wrap:anywhere}.live-time{font-size:12px;color:#a8b4cc}.wait{color:#ffc17b}.early{color:#9ec6ff}.ready{color:#74e2b1}.bad{color:#ff939b}details{margin-top:12px;color:#a8b4cc}summary{color:#9ec6ff;cursor:pointer}@media(max-width:360px){.metrics strong{font-size:14px}}
 
-async function refreshLiveQuotes(){
- if(quoteRefreshing||go.disabled||document.hidden||!latestSignals.length)return;
- quoteRefreshing=true;
- try{
-  const data=await api('/v5/market/tickers',{category:'linear'});
-  const map=new Map(data.list.map(q=>[q.symbol,q]));
-  const time=new Date();
-  for(const x of latestSignals){
-   const q=map.get(x.symbol),bid=Number(q?.bid1Price),ask=Number(q?.ask1Price);
-   const isLong=x.side.startsWith('LONG'),p=isLong?ask:bid;
-   const valid=Number.isFinite(bid)&&Number.isFinite(ask)&&bid>0&&ask>=bid;
-   const spread=valid?100*(ask-bid)/((ask+bid)/2):Infinity;
-   const risk=isLong?p-x.stop:x.stop-p,reward=isLong?x.target-p:p-x.target;
-   const rr=valid&&risk>0&&reward>0?reward/risk:NaN;
-   const moved=valid?Math.abs(p-x.entry)/x.entry*100:Infinity;
-   const stable=valid&&spread<=0.2&&moved<=Math.min(0.5,x.riskPct*0.5)&&Number.isFinite(rr)&&rr>=1.5&&100*risk/p>=0.15&&100*risk/p<=5;
-   const ready=stable&&entryEligible(x);
-   const el=x.element;
-   if(!el)continue;
-   const price=el.querySelector('.live-entry'),details=el.querySelector('.live-details'),verdict=el.querySelector('.verdict');
-   if(price)price.textContent=valid?x.fmt(p):'Unavailable';
-   if(details)details.textContent=(valid?'Quote '+x.fmt(p):'Quote unavailable')+' · Live R:R '+(Number.isFinite(rr)?'1:'+rr.toFixed(2):'N/A')+' · Score '+x.score.toFixed(1)+' · '+x.trend5+'/'+x.trend15;
-   if(verdict){
-    const avoid=!valid||!Number.isFinite(rr)||risk<=0||reward<=0||x.stage==='EXTENDED'||x.score<0||['EXTENDED / WAIT','WIDE STOP / WAIT','TIGHT STOP / WAIT','TREND CONFLICT / WAIT'].includes(x.baseEntryCheck);
-    const decision=avoid?'AVOID':ready?'READY TO REVIEW':'WAIT';
-    x.decision=avoid?'AVOID':ready?'READY TO REVIEW':'WAIT';
-    verdict.textContent=(avoid?'⛔ ':ready?'◉ ':'◷ ')+decision+(ready?'':' · '+(!valid?'QUOTE UNAVAILABLE':!stable?'PRICE / R:R CHECK':'SIGNAL NOT CONFIRMED'));
-    verdict.style.color=avoid?'#ff8a8a':ready?'#69e5a5':'#ffba78';
-   }
-  }
-  rankLive();
-  status.textContent='Bybit bid/ask refreshed '+time.toLocaleTimeString()+' (10s refresh while page open). '+lastScanText+' Signals and ranking use the last full scan.';
- }catch(e){status.textContent='Live quote refresh failed: '+e.message+'. Existing quotes may be stale; do not trade on them.';for(const x of latestSignals)x.decision='AVOID';rankLive()}
- finally{quoteRefreshing=false}
-}
-setInterval(refreshLiveQuotes,10000);
-// Refresh candle indicators and rankings every five minutes while the page is visible.
-setInterval(()=>{if(!document.hidden&&!go.disabled&&Date.now()-lastFullScan>=300000)go.click()},30000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden){if(Date.now()-lastFullScan>=300000&&!go.disabled)go.click();else refreshLiveQuotes()}});
-// Begin scanning on load; the user does not need to press a button.
-go.click();
-</script></html>
+</style>
+<script defer src="./scanner.js?v=2"></script>
+</head>
+<body>
+<main>
+<h1>Bybit Futures Scanner</h1>
+<p class="muted">Public Bybit data · No API keys or login · USDT perpetuals. Up to 10 LONG and 10 SHORT, ranked by score.</p>
+<button id="scan" type="button">Scan now</button>
+<p id="status" class="muted" role="status">Starting…</p>
+<p id="warning" class="wait" role="status"></p>
+<div id="results"></div>
+<details>
+<summary>How the scanner works</summary>
+<p>While this page is visible, quotes refresh every 10 seconds and indicators refresh after each 5-minute candle closes. Timestamp labels show Bybit's response time for the bid/ask snapshot, in your device's time zone.</p>
+<p>EARLY means volume buildup with limited price movement. WAIT means one or more screening checks failed or data is incomplete. READY TO REVIEW means the screening checks passed. Scores rank setups and do not measure probability of profit.</p>
+<p>LONG uses the best ask and SHORT uses the best bid. Top-of-book liquidity shows the smaller notional value at the best bid and ask. Stop and target are estimates from candle prices. Quote-based risk/reward excludes fees, slippage and funding payments. The scanner places no orders.</p>
+</details>
+</main>
+</body>
+</html>
