@@ -41,7 +41,27 @@ async function quotes(){
   const bid=Number(t.bid1Price),ask=Number(t.ask1Price),entry=x.side==='LONG'?ask:bid,spread=100*(ask-bid)/((ask+bid)/2),risk=x.side==='LONG'?entry-x.stop:x.stop-entry,reward=x.side==='LONG'?x.target-entry:entry-x.target,rr=risk>0?reward/risk:0,age=Date.now()-scanAt;
   const marketTurnover=Number(t.turnover24h),fundingRaw=t.fundingRate,funding=fundingRaw===undefined||fundingRaw===null||fundingRaw===''?NaN:Math.abs(Number(fundingRaw)),bidSize=Number(t.bid1Size),askSize=Number(t.ask1Size),topDepth=Math.min(bid*bidSize,ask*askSize);const quoteValid=Number.isFinite(entry)&&entry>0&&bid>0&&ask>0&&ask>=bid&&Number.isFinite(spread)&&Number.isFinite(topDepth);const good=age<300000&&scanErrors===0&&scanCount===scanEligible&&x.confirmed&&quoteValid&&spread<=.15&&marketTurnover>=2000000&&topDepth>=1000&&Number.isFinite(funding)&&funding<=.003&&risk>0&&reward>0&&rr>=1.8&&Math.abs(entry/x.reference-1)<=.003;
   card.querySelector('.live-value').textContent=entry>0&&bid>0&&ask>0?fmt(entry):'—';card.querySelector('.live-time').textContent='Updated '+new Date(quoteAt).toLocaleTimeString()+' · '+(x.side==='LONG'?'Ask':'Bid');e.textContent=entry>0?fmt(entry):'—';v.textContent=good?'READY TO REVIEW · NOT A TRADE SIGNAL':'WAIT · '+(scanErrors?'PARTIAL SCAN':age>=300000?'SCAN EXPIRED':!quoteValid?'INVALID QUOTE':marketTurnover<2000000?'LOW TURNOVER':topDepth<1000?'THIN TOP-OF-BOOK':!Number.isFinite(funding)?'FUNDING UNAVAILABLE':funding>.003?'HIGH FUNDING':rr<1.8?'PRICE / R:R CHECK':spread>.15?'SPREAD TOO WIDE':Math.abs(entry/x.reference-1)>.003?'PRICE MOVED':'QUOTE CHECK');
-  v.className=(good?'ready':'wait')+' verdict';q.textContent='Bybit '+(x.side==='LONG'?'ask':'bid')+' '+fmt(entry)+' · R:R 1:'+fmt(rr)+' · Spread '+fmt(spread)+'% · Top-book 
+  v.className=(good?'ready':'wait')+' verdict';q.textContent='Bybit '+(x.side==='LONG'?'ask':'bid')+' '+fmt(entry)+' · R:R 1:'+fmt(rr)+' · Spread '+fmt(spread)+'% · Top-book  }
+ }catch(e){for(const card of document.querySelectorAll('article[data-symbol]')){const v=card.querySelector('.verdict');v.textContent='WAIT · Live Bybit quote unavailable';v.className='wait verdict';card.querySelector('.entry').textContent='—';card.querySelector('.live-value').textContent='—';card.querySelector('.live-time').textContent='Connection unavailable';} $('warning').textContent='Live quote request failed: '+e.message;}finally{quoteBusy=false;}
+}
+async function scan(){
+ if(scanning)return;scanning=true;$('scan').disabled=true;$('warning').textContent='';$('status').textContent='Fetching current Bybit markets…';
+ try{
+  const [ins,ticks]=await Promise.all([api('instruments-info',{category:'linear',limit:1000,status:'Trading'}),api('tickers',{category:'linear'})]);
+  const valid=new Set((ins.list||[]).filter(x=>x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading').map(x=>x.symbol));
+  let cursor=ins.nextPageCursor;while(cursor){const page=await api('instruments-info',{category:'linear',limit:1000,status:'Trading',cursor});for(const x of page.list||[])if(x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading')valid.add(x.symbol);if(!page.nextPageCursor||page.nextPageCursor===cursor)break;cursor=page.nextPageCursor;}
+  const eligible=(ticks.list||[]).filter(t=>valid.has(t.symbol)&&Number(t.turnover24h)>=1000000&&Number(t.lastPrice)>0&&Number(t.bid1Price)>0&&Number(t.ask1Price)>0);
+  if(!eligible.length)throw Error('No eligible contracts returned');
+  const out=[];let done=0,errors=0,next=0;const workers=Array.from({length:8},async()=>{while(next<eligible.length){const t=eligible[next++];try{const x=await analyze(t);if(x)out.push(x);}catch(e){errors++;}done++;if(done%15===0)$('status').textContent='Scanning '+done+'/'+eligible.length+' contracts · '+errors+' request errors';}});
+  await Promise.all(workers);scanErrors=errors;scanCount=done;scanEligible=eligible.length;scanAt=Date.now();signals=out.sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).filter((x,i,a)=>a.slice(0,i).filter(y=>y.side===x.side).length<10);
+  $('status').textContent='Scan completed '+new Date(scanAt).toLocaleTimeString()+' · '+done+' contracts · '+out.length+' signals · '+errors+' errors';
+  if(errors)$('warning').textContent='PARTIAL SCAN: '+errors+' market requests failed. Results may omit candidates.';
+  render();await quotes();
+ }catch(e){signals=[];scanAt=0;$('results').innerHTML='';$('status').textContent='SCAN FAILED';$('warning').textContent=e.message+' — no verified candidates.';}
+ finally{scanning=false;$('scan').disabled=false;}
+}
+$('scan').onclick=scan;scan();setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)quotes();},10000);setInterval(()=>{if(document.visibilityState==='visible'&&scanAt&&Date.now()-scanAt>=300000){for(const card of document.querySelectorAll('article[data-symbol]')){const v=card.querySelector('.verdict');v.textContent='WAIT · SCAN EXPIRED';v.className='wait verdict';}}},1000);setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)scan();},300000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-scanAt>300000)scan();else quotes();}});
+</script></body></html+fmt(topDepth)+' · Funding '+fmt(funding*100)+'% · '+new Date(quoteAt).toLocaleTimeString();
  }
  }catch(e){for(const card of document.querySelectorAll('article[data-symbol]')){const v=card.querySelector('.verdict');v.textContent='WAIT · Live Bybit quote unavailable';v.className='wait verdict';card.querySelector('.entry').textContent='—';card.querySelector('.live-value').textContent='—';card.querySelector('.live-time').textContent='Connection unavailable';} $('warning').textContent='Live quote request failed: '+e.message;}finally{quoteBusy=false;}
 }
@@ -62,25 +82,4 @@ async function scan(){
  finally{scanning=false;$('scan').disabled=false;}
 }
 $('scan').onclick=scan;scan();setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)quotes();},10000);setInterval(()=>{if(document.visibilityState==='visible'&&scanAt&&Date.now()-scanAt>=300000){for(const card of document.querySelectorAll('article[data-symbol]')){const v=card.querySelector('.verdict');v.textContent='WAIT · SCAN EXPIRED';v.className='wait verdict';}}},1000);setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)scan();},300000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-scanAt>300000)scan();else quotes();}});
-</script></body></html>+fmt(topDepth)+' · Funding '+fmt(funding*100)+'% · '+new Date(quoteAt).toLocaleTimeString();
- }
- }catch(e){for(const card of document.querySelectorAll('article[data-symbol]')){const v=card.querySelector('.verdict');v.textContent='WAIT · Live Bybit quote unavailable';v.className='wait verdict';card.querySelector('.entry').textContent='—';card.querySelector('.live-value').textContent='—';card.querySelector('.live-time').textContent='Connection unavailable';} $('warning').textContent='Live quote request failed: '+e.message;}
-}
-async function scan(){
- if(scanning)return;scanning=true;$('scan').disabled=true;$('warning').textContent='';$('status').textContent='Fetching current Bybit markets…';
- try{
-  const [ins,ticks]=await Promise.all([api('instruments-info',{category:'linear',limit:1000,status:'Trading'}),api('tickers',{category:'linear'})]);
-  const valid=new Set((ins.list||[]).filter(x=>x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading').map(x=>x.symbol));
-  let cursor=ins.nextPageCursor;while(cursor){const page=await api('instruments-info',{category:'linear',limit:1000,status:'Trading',cursor});for(const x of page.list||[])if(x.quoteCoin==='USDT'&&x.contractType==='LinearPerpetual'&&x.status==='Trading')valid.add(x.symbol);if(!page.nextPageCursor||page.nextPageCursor===cursor)break;cursor=page.nextPageCursor;}
-  const eligible=(ticks.list||[]).filter(t=>valid.has(t.symbol)&&Number(t.turnover24h)>=1000000&&Number(t.lastPrice)>0&&Number(t.bid1Price)>0&&Number(t.ask1Price)>0);
-  if(!eligible.length)throw Error('No eligible contracts returned');
-  const out=[];let done=0,errors=0,next=0;const workers=Array.from({length:8},async()=>{while(next<eligible.length){const t=eligible[next++];try{const x=await analyze(t);if(x)out.push(x);}catch(e){errors++;}done++;if(done%15===0)$('status').textContent='Scanning '+done+'/'+eligible.length+' contracts · '+errors+' request errors';}});
-  await Promise.all(workers);scanErrors=errors;scanCount=done;scanEligible=eligible.length;scanAt=Date.now();signals=out.sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).slice(0,10);
-  $('status').textContent='Scan completed '+new Date(scanAt).toLocaleTimeString()+' · '+done+' contracts · '+out.length+' signals · '+errors+' errors';
-  if(errors)$('warning').textContent='PARTIAL SCAN: '+errors+' market requests failed. Results may omit candidates.';
-  render();await quotes();
- }catch(e){signals=[];scanAt=0;$('results').innerHTML='';$('status').textContent='SCAN FAILED';$('warning').textContent=e.message+' — no verified candidates.';}
- finally{scanning=false;$('scan').disabled=false;}
-}
-$('scan').onclick=scan;scan();setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)quotes();},10000);setInterval(()=>{if(document.visibilityState==='visible'&&!scanning)scan();},300000);document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){if(Date.now()-scanAt>300000)scan();else quotes();}});
-</script></body></html>
+</script></body></html
