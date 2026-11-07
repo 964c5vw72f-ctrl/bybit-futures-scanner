@@ -14,7 +14,7 @@
 .market-links a{color:#9ec6ff;display:inline-block;padding:8px 0;margin-right:18px}.market-links a[aria-current]{color:#edf2ff;font-weight:700}
 .pairs-form textarea{box-sizing:border-box;width:100%;display:block;margin:8px 0;padding:10px;font:inherit;color:inherit;background:#172137;border:1px solid #65769a;border-radius:8px}
 </style>
-<script defer src="./scanner.js?v=7"></script>
+<script defer src="./scanner.js?v=8"></script>
 </head>
 <body>
 <main>
@@ -43,7 +43,7 @@
 <div id="results"></div>
 <details>
 <summary>How the scanner works</summary>
-<p>While this page is visible, quotes refresh every 10 seconds and indicators refresh after each 5-minute candle closes. Timestamp labels show Bybit's response time for the bid/ask snapshot, in your device's time zone.</p>
+<p>Bybit LIVE uses the public futures stream while the page is visible. When the stream is unavailable for a pair, Bybit snapshots refresh every 10 seconds. Indicators refresh after each 5-minute candle closes. Timestamps use your device's time zone.</p>
 <p>EARLY means volume buildup with limited price movement. WAIT means one or more screening checks failed or data is incomplete. READY TO REVIEW means the screening checks passed. Scores rank setups and do not measure probability of profit.</p>
 <p>LONG uses the best ask and SHORT uses the best bid. Top-of-book liquidity shows the smaller notional value at the best bid and ask. Stop and target are estimates from candle prices. Quote-based risk/reward excludes fees, slippage and funding payments. The scanner places no orders.</p>
 </details>

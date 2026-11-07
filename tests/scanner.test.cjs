@@ -207,6 +207,37 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   await settle();
   assert.match(dom.status.textContent, /Scan complete · 24 \/ 24/);
   assert.match(firstVerdict(), /^READY TO REVIEW/);
+
+  let socket;
+  const sent = [];
+  app.WebSocket = class {
+    constructor(url) {
+      assert.equal(url, 'wss://stream.bybit.com/v5/public/linear');
+      socket = this;
+      this.readyState = 0;
+    }
+    send(message) { sent.push(JSON.parse(message)); }
+    close() { this.readyState = 3; this.onclose?.(); }
+  };
+  tick();
+  socket.readyState = 1;
+  socket.onopen();
+  const symbol = firstCard().dataset.symbol;
+  const book = firstCard().children[3];
+  assert(sent[0].args.includes('tickers.' + symbol));
+  const sendTicker = (type, data, ts = now) =>
+    socket.onmessage({data: JSON.stringify({topic: 'tickers.' + symbol, type, ts, data})});
+  sendTicker('delta', {ask1Price: '101'});
+  assert.match(book.children[1].textContent, /^Bybit snapshot/);
+  sendTicker('snapshot', {symbol, bid1Price: '100.595', ask1Price: '100.606',
+    bid1Size: '100', ask1Size: '100', fundingRate: '0', turnover24h: '5000000'});
+  sendTicker('delta', {ask1Price: '100.607'});
+  sendTicker('delta', {ask1Price: '101'}, now - 1);
+  tick();
+  assert.match(book.children[0].textContent, /Ask 100.607$/);
+  assert.match(book.children[1].textContent, /^Bybit LIVE/);
+  socket.close();
+  assert.match(book.children[1].textContent, /^Bybit snapshot/);
 });
 
 test('GYLEX catalog accepts hundreds of symbols and deduplicates pair formats', () => {
