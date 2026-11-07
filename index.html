@@ -5,7 +5,7 @@ const $=id=>document.getElementById(id);
 let lastSignals=[];let scanAge=Infinity;let lastLoadAt=Date.now();
 async function refreshQuotes(signals,age){
  lastSignals=signals;
- if(age>30)return;
+ if(age>30){document.querySelectorAll('.livequote').forEach(el=>{el.textContent='STALE SCAN · WAIT';el.style.color='#ffc17b';});return;}
  try{
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),6500);
@@ -27,8 +27,10 @@ async function refreshQuotes(signals,age){
     const reward=x.side==='LONG'?target-entry:entry-target;
     const spread=100*(ask-bid)/((ask+bid)/2);
     const rr=risk>0?reward/risk:0;
-    const good=entry>0&&risk>0&&reward>0&&rr>=1.5&&spread<=0.2;
-    label.textContent='Bybit '+(x.side==='LONG'?'ask':'bid')+' '+fmt(entry)+' · '+time+' · R:R 1:'+rr.toFixed(2)+' · '+(good?'REVIEW':'WAIT');
+    const confirmed=x.stage==='CONFIRMED'&&x.confirmed===true;
+    const good=confirmed&&entry>0&&risk>0&&reward>0&&rr>=1.5&&spread<=0.2;
+    const reason=!confirmed?'UNCONFIRMED':(!good?'PRICE / R:R CHECK':'READY TO REVIEW');
+    label.textContent='Bybit '+(x.side==='LONG'?'ask':'bid')+' '+fmt(entry)+' · '+time+' · R:R 1:'+rr.toFixed(2)+' · '+(good?'READY TO REVIEW':'WAIT · '+reason);
     label.style.color=good?'#74e2b1':'#ffc17b';
   });
  }catch(e){
@@ -52,7 +54,7 @@ async function load(){
   if(!signals.length){$('results').innerHTML='<p>No qualifying candidates in the last scan. Do not force a trade.</p>';return;}
   $('results').innerHTML=['LONG','SHORT'].map(side=>{
    const list=signals.filter(x=>x.side===side);
-   return list.length?'<h2 class="'+side.toLowerCase()+'">'+side+' candidates</h2>'+list.map((x,i)=>'<article><div class="score">#'+(signals.indexOf(x)+1)+' · Score '+fmt(x.score)+'</div><div class="head"><span class="symbol">'+safe(x.symbol)+'</span><strong class="'+side.toLowerCase()+'">'+side+'</strong></div><p class="muted">Screened momentum · Review entry</p><div class="metrics"><div><small>Reference</small><strong>'+fmt(x.entry_reference)+'</strong></div><div><small>Stop*</small><strong>'+fmt(x.stop)+'</strong></div><div><small>Target*</small><strong>'+fmt(x.target)+'</strong></div></div><div class="muted">Model R:R 1:2 · 5m/15m '+safe(x.trend5)+'/'+safe(x.trend15)+'</div><details><summary>More indicators</summary><p>RSI6 '+fmt(x.rsi6)+' · RSI14 '+fmt(x.rsi14)+' · Volume ×'+fmt(x.volume_ratio)+' · 15m '+fmt(x.momentum_15m_pct)+'% · 24h turnover $'+fmt(x.turnover24h_usdt)+'</p><p>Closed candle: '+safe(x.candle_close_utc)+'</p></details></article>').join(''):'';
+   return list.length?'<h2 class="'+side.toLowerCase()+'">'+side+' candidates</h2>'+list.map((x,i)=>'<article><div class="score">#'+(signals.indexOf(x)+1)+' · Score '+fmt(x.score)+'</div><div class="head"><span class="symbol">'+safe(x.symbol)+'</span><strong class="'+side.toLowerCase()+'">'+side+'</strong></div><p class="muted">WATCH / UNCONFIRMED · WAIT</p><div class="metrics"><div><small>Reference</small><strong>'+fmt(x.entry_reference)+'</strong></div><div><small>Stop*</small><strong>'+fmt(x.stop)+'</strong></div><div><small>Target*</small><strong>'+fmt(x.target)+'</strong></div></div><div class="muted">Model R:R 1:2 · 5m/15m '+safe(x.trend5)+'/'+safe(x.trend15)+'</div><details><summary>More indicators</summary><p>RSI6 '+fmt(x.rsi6)+' · RSI14 '+fmt(x.rsi14)+' · Volume ×'+fmt(x.volume_ratio)+' · 15m '+fmt(x.momentum_15m_pct)+'% · 24h turnover $'+fmt(x.turnover24h_usdt)+'</p><p>Closed candle: '+safe(x.candle_close_utc)+'</p></details></article>').join(''):'';
   }).join('');
   await refreshQuotes(signals,age);
  }catch(e){$('status').textContent='Scan unavailable';$('warning').textContent=String(e.message);$('results').innerHTML='';}
