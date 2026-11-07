@@ -200,13 +200,23 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(firstVerdict(), /^READY TO REVIEW/);
 });
 
-test('GYLEX mode intersects the observed pairs with eligible Bybit perpetuals', async () => {
-  const symbols = ['BTCUSDT', 'ICNTUSDT', 'SOLUSDT', 'BZUSDT', 'ETHUSDT'];
+test('GYLEX catalog accepts hundreds of symbols and deduplicates pair formats', () => {
+  const pairs = Array.from({length: 350}, (_, i) => 'TOKEN' + i + '/USDT');
+  const input = [...pairs, 'TOKEN0USDT', 'token1-usdt', 'ETH/USDC', 'invalid'].join(', ');
+  context.catalogInput = input;
+  assert.equal(run('parseGylexPairs(catalogInput).size'), 350);
+  assert.equal(run("parseGylexPairs(catalogInput).has('TOKEN349USDT')"), true);
+  assert.equal(run("parseGylexPairs('garbage').size"), 0);
+});
+
+test('GYLEX mode intersects the imported pairs with eligible Bybit perpetuals', async () => {
+  const symbols = ['BTCUSDT', 'ICNTUSDT', 'SOLUSDT', 'BZUSDT', 'ETHUSDT', 'AVAXUSDT'];
   const app = vm.createContext({
     document: {hidden: true, addEventListener() {}, getElementById() { return {setAttribute() {}}; }},
     window: {addEventListener() {}},
     navigator: {onLine: true},
     location: {search: '?market=gylex'},
+    localStorage: {getItem() { return 'BTC/USDT ICNT/USDT SOLUSDT ETHUSDT AVAX/USDT'; }},
     setInterval() {}, setTimeout, clearTimeout, AbortController, URLSearchParams,
     async fetch(url) {
       const instruments = url.includes('/instruments-info?');
@@ -221,5 +231,5 @@ test('GYLEX mode intersects the observed pairs with eligible Bybit perpetuals', 
   vm.runInContext(fs.readFileSync('docs/scanner.js', 'utf8'), app);
   const symbolsFound = await vm.runInContext(
     "universe('https://api.bybit.com', new AbortController().signal).then(data => data.eligible.map(row => row.symbol))", app);
-  assert.deepEqual([...symbolsFound], ['BTCUSDT', 'ICNTUSDT']);
+  assert.deepEqual([...symbolsFound], ['BTCUSDT', 'ICNTUSDT', 'AVAXUSDT']);
 });

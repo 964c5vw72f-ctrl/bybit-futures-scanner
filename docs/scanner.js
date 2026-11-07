@@ -9,10 +9,13 @@ const QUOTE_INTERVAL_MS = 10_000;
 const SCAN_RETRY_MS = 30_000;
 const SCAN_TIMEOUT_MS = 75_000;
 const MARKET = {category: 'linear'};
-const GYLEX_PAIRS = new Set([
+const GYLEX_STARTER_PAIRS = [
   'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'ICNTUSDT'
-]);
+];
+const GYLEX_STORAGE_KEY = 'scanner.gylex-pairs';
 const gylexMode = new URLSearchParams(location.search).get('market') === 'gylex';
+const importedGylexPairs = gylexMode ? loadGylexPairs() : new Set();
+const gylexPairs = importedGylexPairs.size ? importedGylexPairs : new Set(GYLEX_STARTER_PAIRS);
 const $ = id => document.getElementById(id);
 const fmt = n => Number.isFinite(n) ? n.toLocaleString('en-US', {maximumSignificantDigits: 8}) : '—';
 const priceText = n => n.toLocaleString('en-US', {useGrouping: false, maximumFractionDigits: 20});
@@ -30,6 +33,20 @@ let incomplete = false;
 let quoteSnapshot = null;
 let quoteIssue = '';
 let pageSuspended = false;
+
+function parseGylexPairs(text) {
+  const tokens = text.trim().toUpperCase().split(/[\s,;]+/);
+  return new Set(tokens.filter(token => /^[A-Z0-9]{1,32}(?:[/-])?USDT$/.test(token))
+    .map(token => token.replace(/[/-]/, '')));
+}
+
+function loadGylexPairs() {
+  try {
+    return parseGylexPairs(localStorage.getItem(GYLEX_STORAGE_KEY) || '');
+  } catch {
+    return new Set();
+  }
+}
 
 function fresh(time, maxAge, now = Date.now()) {
   return Number.isSafeInteger(time) && now - time >= -FUTURE_TOLERANCE_MS && now - time < maxAge;
@@ -73,7 +90,7 @@ async function universe(base, signal) {
     for (const row of page.list) {
       if (row.quoteCoin === 'USDT' && row.settleCoin === 'USDT' &&
           row.contractType === 'LinearPerpetual' && row.status === 'Trading' &&
-          (!gylexMode || GYLEX_PAIRS.has(row.symbol))) {
+          (!gylexMode || gylexPairs.has(row.symbol))) {
         instruments.add(row.symbol);
       }
     }
@@ -395,6 +412,27 @@ function tick() {
 
 $(gylexMode ? 'gylex-market' : 'bybit-market').setAttribute('aria-current', 'page');
 $('gylex-note').hidden = !gylexMode;
+if (gylexMode) {
+  $('gylex-count').textContent = importedGylexPairs.size ?
+    'Imported list · ' + gylexPairs.size + ' pairs.' :
+    'Starter list · 8 pairs from the GYLEX screenshot.';
+  $('gylex-pairs').value = [...gylexPairs].join('\n');
+  $('gylex-form').onsubmit = event => {
+    event.preventDefault();
+    const pairs = parseGylexPairs($('gylex-pairs').value);
+    if (!pairs.size) {
+      $('gylex-error').textContent = 'Add at least one USDT pair, such as BTC/USDT.';
+      return;
+    }
+    try {
+      localStorage.setItem(GYLEX_STORAGE_KEY, [...pairs].join('\n'));
+    } catch {
+      $('gylex-error').textContent = 'This browser could not save the list.';
+      return;
+    }
+    location.reload();
+  };
+}
 $('scan').onclick = scan;
 document.addEventListener('visibilitychange', () => {
   invalidateQuotes();

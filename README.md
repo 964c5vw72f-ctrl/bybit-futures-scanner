@@ -12,7 +12,7 @@ GitHub Pages publishes `main:/docs`. The browser scans trading USDT perpetuals r
 
 The quote panel uses actual Bybit best bid and ask with the exchange API response timestamp. Quotes refresh every ten seconds and the full scan runs after each five-minute candle closes while the page is visible. The displayed R:R uses ask for LONG or bid for SHORT against candle-derived stop and target estimates. It excludes execution costs. Scores rank heuristic setups and do not measure win probability. If Bybit does not serve public futures to the device's network, the scanner reports the failure and retries.
 
-[GYLEX watchlist](https://964c5vw72f-ctrl.github.io/bybit-futures-scanner/?market=gylex) filters the scan to the eight USDT perpetuals observed in the app. The list is maintained manually. All candles, quotes and screening come from Bybit, so verify the corresponding contract and execution price in GYLEX.
+[GYLEX watchlist](https://964c5vw72f-ctrl.github.io/bybit-futures-scanner/?market=gylex) starts with the eight USDT perpetuals observed in the app. Use **Import GYLEX futures list** to replace the starter list in one paste. The browser keeps the list on the device and scans its overlap with eligible Bybit perpetuals. All candles, quotes and screening come from Bybit, so verify the corresponding contract and execution price in GYLEX.
 
 ## Local checks
 
