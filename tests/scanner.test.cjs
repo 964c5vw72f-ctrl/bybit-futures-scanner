@@ -66,7 +66,10 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     };
   }
   const dom = Object.fromEntries(['scan', 'status', 'warning', 'results'].map(id => [id, element()]));
-  const now = 1_800_000_120_000;
+  const firstClose = 1_800_000_000_000;
+  let now = firstClose + 120_000;
+  let expectedClose = firstClose;
+  const events = {};
   const symbols = ['L', 'S'].flatMap(side => Array.from({length: 12}, (_, i) => side + i));
   let mode = 'healthy';
   let tick;
@@ -75,7 +78,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   }
   const app = vm.createContext({
     document: {hidden: true, addEventListener() {}, getElementById: id => dom[id], createElement: element},
-    window: {addEventListener() {}},
+    window: {addEventListener(name, callback) { events[name] = callback; }},
     navigator: {onLine: true},
     setInterval: callback => { tick = callback; },
     setTimeout, clearTimeout, AbortController, URL, URLSearchParams, Date: Clock,
@@ -101,7 +104,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
         const symbol = params.get('symbol');
         if (mode === 'partial' && symbol === 'L0') return {ok: false, status: 503};
         const end = Number(params.get('end')) + 1;
-        assert.equal(end, 1_800_000_000_000);
+        assert.equal(end, expectedClose);
         const direction = symbol.startsWith('L') ? 1 : -1;
         const levels = Array.from({length: 42}, (_, i) => 100 + direction * (i % 2) * 0.2);
         levels[41] = 100;
@@ -146,16 +149,47 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   for (const [failure, reason] of [['missing funding', /Funding unavailable/],
     ['stale', /Bybit quote refresh failed/], ['HTTP failure', /Bybit quote refresh failed/]]) {
     mode = failure;
-    await read('refreshQuotes()');
+    now += 10_000;
+    tick();
+    await settle();
     assert.match(firstVerdict(), /^WAIT/);
     assert.match(firstVerdict(), reason);
   }
   mode = 'healthy';
-  await read('refreshQuotes()');
+  now += 10_000;
+  tick();
+  await settle();
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+
+  events.pagehide();
+  assert.match(firstVerdict(), /^WAIT · Page paused/);
+  assert.equal(firstCard().children[3].children[1].textContent, 'No fresh bid/ask');
+  now += 60_000;
+  tick();
+  await settle();
+  assert.match(firstVerdict(), /^WAIT · Page paused/);
+  events.pageshow({persisted: true});
+  await settle();
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+
+  expectedClose += 300_000;
+  now = expectedClose + 2500;
+  const previousCard = firstCard();
+  tick();
+  assert.match(firstVerdict(), /^WAIT · Scan in progress/);
+  await settle();
+  assert.notEqual(firstCard(), previousCard);
+  assert.equal(read('scanClose'), expectedClose);
   assert.match(firstVerdict(), /^READY TO REVIEW/);
   mode = 'partial';
   await dom.scan.onclick();
   await settle();
   assert.match(dom.status.textContent, /Partial scan · 23 \/ 24/);
   assert.match(firstVerdict(), /^WAIT · Incomplete candle scan/);
+  mode = 'healthy';
+  now += 30_000;
+  tick();
+  await settle();
+  assert.match(dom.status.textContent, /Scan complete · 24 \/ 24/);
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
 });

@@ -25,6 +25,7 @@ let scanClose = 0;
 let incomplete = false;
 let quoteSnapshot = null;
 let quoteIssue = '';
+let pageSuspended = false;
 
 function fresh(time, maxAge, now = Date.now()) {
   return Number.isSafeInteger(time) && now - time >= -FUTURE_TOLERANCE_MS && now - time < maxAge;
@@ -183,8 +184,12 @@ function quoteMetrics(row, setup) {
   return {bid, ask, price, spread, depth, turnover, funding, riskPct: 100 * risk / price, rr};
 }
 
+function pageInactive() {
+  return pageSuspended || document.hidden;
+}
+
 function verdict(setup, quote) {
-  if (document.hidden) return ['WAIT', 'Page paused'];
+  if (pageInactive()) return ['WAIT', 'Page paused'];
   if (scanBusy) return ['WAIT', 'Scan in progress'];
   if (incomplete) return ['WAIT', 'Incomplete candle scan'];
   if (Date.now() >= scanClose + CANDLE_MS + CLOSE_GRACE_MS) return ['WAIT', 'Candle scan expired'];
@@ -253,7 +258,7 @@ function render() {
 }
 
 function updateCards() {
-  const snapshot = !document.hidden && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS) ? quoteSnapshot : null;
+  const snapshot = !pageInactive() && navigator.onLine && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS) ? quoteSnapshot : null;
   for (const setup of signals) {
     const quote = snapshot ? quoteMetrics(snapshot.rows.get(setup.symbol), setup) : null;
     const [label, reason] = verdict(setup, quote);
@@ -277,7 +282,7 @@ function invalidateQuotes() {
 }
 
 async function refreshQuotes() {
-  if (document.hidden || !navigator.onLine || scanBusy || quoteRequest || !signals.length) return;
+  if (pageInactive() || !navigator.onLine || scanBusy || quoteRequest || !signals.length) return;
   const request = new AbortController();
   quoteRequest = request;
   nextQuoteAt = Date.now() + QUOTE_INTERVAL_MS;
@@ -302,7 +307,7 @@ async function refreshQuotes() {
 }
 
 async function scan() {
-  if (scanBusy || document.hidden || !navigator.onLine) return;
+  if (scanBusy || pageInactive() || !navigator.onLine) return;
   scanBusy = true;
   invalidateQuotes();
   $('scan').disabled = true;
@@ -363,7 +368,7 @@ async function scan() {
 }
 
 function tick() {
-  if (document.hidden) return;
+  if (pageInactive()) return;
   if (navigator.onLine && !scanBusy && Date.now() >= nextScanAt) {
     scan();
   } else {
@@ -374,6 +379,19 @@ function tick() {
 
 $('scan').onclick = scan;
 document.addEventListener('visibilitychange', () => {
+  invalidateQuotes();
+  updateCards();
+  tick();
+});
+// Safari can freeze and restore this page through its back/forward cache.
+window.addEventListener('pagehide', () => {
+  pageSuspended = true;
+  invalidateQuotes();
+  updateCards();
+});
+window.addEventListener('pageshow', event => {
+  if (!event.persisted && !pageSuspended) return;
+  pageSuspended = false;
   invalidateQuotes();
   updateCards();
   tick();
