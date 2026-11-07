@@ -1,0 +1,26 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b1020"><title>Bybit Futures Scanner</title><style>
+*{box-sizing:border-box}body{margin:0;background:#0b1020;color:#edf2ff;font:16px -apple-system,BlinkMacSystemFont,Arial,sans-serif}main{max-width:780px;margin:auto;padding:24px 16px 80px}h1{font-size:28px;margin:10px 0}h2{font-size:20px;margin:30px 0 14px}.muted{color:#a8b4cc;line-height:1.55}.bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:18px 0}button{background:#4385ee;color:white;border:0;border-radius:12px;padding:13px 18px;font-weight:700;font-size:16px}article{background:#172137;border:1px solid #354460;border-radius:18px;padding:18px;margin:14px 0}.head{display:flex;justify-content:space-between;gap:10px;align-items:center}.symbol{font-size:23px;font-weight:800;overflow-wrap:anywhere}.long{color:#74e2b1}.short{color:#ff939b}.score{color:#9ec6ff;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:18px 0}.metrics div{min-width:0}.metrics small{display:block;color:#a8b4cc}.metrics strong{font-size:17px;overflow-wrap:anywhere}.notice{padding:12px 0;color:#ffc17b}details{margin-top:12px;color:#a8b4cc}summary{color:#9ec6ff;cursor:pointer}@media(max-width:360px){.metrics strong{font-size:14px}}
+</style></head><body><main><h1>Bybit Futures Scanner</h1><p class="muted">Public market data · No account access · TOP 10: LONG first, SHORT second. Scheduled scans are not real-time signals.</p><div class="bar"><button id="refresh">Refresh data</button><span id="status" class="muted">Loading…</span></div><div id="warning" class="notice" role="status"></div><div id="results"></div><p class="muted">Entry is a reference from the last completed 5-minute candle, not an executable quote. Stop and target are preliminary technical levels. Prices can move rapidly. No automated trades or guarantees. Verify current Bybit bid/ask, spread and order-book liquidity before any decision.</p></main><script>
+const $=id=>document.getElementById(id);
+const fmt=n=>Number(n).toLocaleString('en-US',{maximumSignificantDigits:7});
+const safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function load(){
+ $('status').textContent='Fetching latest published scan…';
+ try{
+  const response=await fetch('./output/latest.json?t='+Date.now(),{cache:'no-store'});
+  if(!response.ok)throw Error('No published scan yet (HTTP '+response.status+')');
+  const d=await response.json();const date=new Date(d.generated_utc);
+  if(!Number.isFinite(date.getTime()))throw Error('Invalid scan timestamp');
+  const age=(Date.now()-date.getTime())/60000;
+  $('status').textContent='Scan: '+date.toLocaleString()+' · '+d.scanned_symbols+' checked · '+(d.errors||[]).length+' errors';
+  $('warning').textContent=age>30?'STALE DATA — last scan is '+Math.round(age)+' minutes old. Do not treat these as current entry signals.':'Quotes are not live. Results are from the latest scheduled scan.';
+  const signals=(d.signals||[]).filter(x=>x.side==='LONG'||x.side==='SHORT').sort((a,b)=>(a.side==='LONG'?0:1)-(b.side==='LONG'?0:1)||b.score-a.score).slice(0,10);
+  if(!signals.length){$('results').innerHTML='<p>No qualifying candidates in the last scan. Do not force a trade.</p>';return;}
+  $('results').innerHTML=['LONG','SHORT'].map(side=>{
+   const list=signals.filter(x=>x.side===side);
+   return list.length?'<h2 class="'+side.toLowerCase()+'">'+side+' candidates</h2>'+list.map((x,i)=>'<article><div class="score">#'+(signals.indexOf(x)+1)+' · Score '+fmt(x.score)+'</div><div class="head"><span class="symbol">'+safe(x.symbol)+'</span><strong class="'+side.toLowerCase()+'">'+side+'</strong></div><p class="muted">Screened momentum · Review entry</p><div class="metrics"><div><small>Reference</small><strong>'+fmt(x.entry_reference)+'</strong></div><div><small>Stop*</small><strong>'+fmt(x.stop)+'</strong></div><div><small>Target*</small><strong>'+fmt(x.target)+'</strong></div></div><div class="muted">Model R:R 1:2 · 5m/15m '+safe(x.trend5)+'/'+safe(x.trend15)+'</div><details><summary>More indicators</summary><p>RSI6 '+fmt(x.rsi6)+' · RSI14 '+fmt(x.rsi14)+' · Volume ×'+fmt(x.volume_ratio)+' · 15m '+fmt(x.momentum_15m_pct)+'% · 24h turnover $'+fmt(x.turnover24h_usdt)+'</p><p>Closed candle: '+safe(x.candle_close_utc)+'</p></details></article>').join(''):'';
+  }).join('');
+ }catch(e){$('status').textContent='Scan unavailable';$('warning').textContent=String(e.message);$('results').innerHTML='';}
+}
+$('refresh').addEventListener('click',load);load();setInterval(load,60000);
+</script></body></html>
