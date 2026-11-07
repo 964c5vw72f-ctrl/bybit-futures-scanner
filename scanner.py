@@ -9,8 +9,8 @@ import urllib.request
 
 BASES = ["https://api.bybit.com", "https://api.bytick.com", "https://api.bybit.nl", "https://api.bybit-tr.com"]
 HEADERS = {"User-Agent": "bybit-public-futures-scanner/1.0"}
-TOP_N = int(os.getenv("TOP_N", "60"))
-WORKERS = 5
+TOP_N = int(os.getenv("TOP_N", "0"))
+WORKERS = 12
 
 def get(path, params):
     """Try official Bybit API domains; never replace blocked data with estimates."""
@@ -91,8 +91,27 @@ def analyze(ticker):
     if direction is None:
         return None
     score = round(abs(momentum) * 2 + min(ratio, 6) * 2, 2)
+    long_side = direction.startswith("LONG")
+    highs = [float(x[2]) for x in rows]
+    lows = [float(x[3]) for x in rows]
+    stop = min(lows[-7:]) if long_side else max(highs[-7:])
+    risk = (price - stop) if long_side else (stop - price)
+    if risk <= 0 or risk / price > 0.045 or risk / price < 0.001:
+        return None
+    target = price + 2 * risk if long_side else price - 2 * risk
+    if target <= 0:
+        return None
+    trend5 = "UP" if closes[-1] > closes[-2] else "DOWN"
+    trend15 = "UP" if closes[-1] > closes[-4] else "DOWN"
+    if trend5 != trend15 or trend5 != ("UP" if long_side else "DOWN"):
+        return None
+    if (rsi6 > 78 if long_side else rsi6 < 22) or abs(momentum) > 4.5:
+        return None
     return {
         "symbol": symbol, "signal": direction, "score": score,
+        "side": "LONG" if long_side else "SHORT",
+        "stage": "DEVELOPING", "entry_reference": price,
+        "stop": stop, "target": target, "trend5": trend5, "trend15": trend15,
         "last_closed_5m_price": price, "momentum_15m_pct": round(momentum, 3),
         "volume_ratio": round(ratio, 2), "rsi6": round(rsi6, 1),
         "rsi14": round(rsi14, 1), "candle_close_utc":
@@ -108,7 +127,7 @@ def main():
     eligible = [t for t in tickers if t["symbol"] in valid
                 and float(t.get("turnover24h") or 0) >= 1000000]
     eligible.sort(key=lambda t: float(t.get("turnover24h") or 0), reverse=True)
-    candidates = eligible[:TOP_N]
+    candidates = eligible[:TOP_N] if TOP_N > 0 else eligible
     results, errors = [], []
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         jobs = {pool.submit(analyze, t): t["symbol"] for t in candidates}
@@ -119,11 +138,11 @@ def main():
                     results.append(item)
             except Exception as exc:
                 errors.append({"symbol": jobs[future], "error": str(exc)})
-    results.sort(key=lambda x: x["score"], reverse=True)
+    results.sort(key=lambda x: (not x["signal"].startswith("LONG"), -x["score"]))
     report = {
         "generated_utc": started, "source": "Bybit public V5 REST API",
         "market": "USDT linear perpetual", "eligible_symbols": len(eligible),
-        "scanned_symbols": len(candidates), "signals": results[:20],
+        "scanned_symbols": len(candidates), "signals": results[:10],
         "errors": errors, "disclaimer": "Watchlist only; not a trade instruction. "
         "No orders are placed. No signal guarantees profit."
     }
