@@ -4,7 +4,9 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const context = vm.createContext({
-  document: {hidden: true, addEventListener() {}, getElementById() { return {}; }},
+  document: {hidden: true, addEventListener() {}, getElementById() { return {setAttribute() {}}; }},
+  location: {search: ''},
+  URLSearchParams,
   window: {addEventListener() {}},
   navigator: {onLine: true},
   setInterval() {}
@@ -62,10 +64,11 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     return {
       children: [], dataset: {},
       append(...children) { this.children.push(...children); },
-      replaceChildren() { this.children = []; }
+      replaceChildren() { this.children = []; },
+      setAttribute(name, value) { this[name] = value; }
     };
   }
-  const dom = Object.fromEntries(['scan', 'status', 'warning', 'results'].map(id => [id, element()]));
+  const dom = Object.fromEntries(['scan', 'status', 'warning', 'results', 'readiness', 'bybit-market', 'gylex-market', 'gylex-note'].map(id => [id, element()]));
   const firstClose = 1_800_000_000_000;
   let now = firstClose + 120_000;
   let expectedClose = firstClose;
@@ -80,6 +83,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     document: {hidden: true, addEventListener() {}, getElementById: id => dom[id], createElement: element},
     window: {addEventListener(name, callback) { events[name] = callback; }},
     navigator: {onLine: true},
+    location: {search: ''},
     setInterval: callback => { tick = callback; },
     setTimeout, clearTimeout, AbortController, URL, URLSearchParams, Date: Clock,
     async fetch(url) {
@@ -143,6 +147,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     assert.deepEqual(scores, [...scores].sort((a, b) => b - a));
   }
   assert.match(firstVerdict(), /^READY TO REVIEW/);
+  assert.match(dom.readiness.textContent, /^20 READY TO REVIEW/);
   assert.match(firstCard().children[3].children[0].textContent, /Bid 100.595 · Ask 100.605/);
   assert.match(firstCard().children[3].children[1].textContent, /^Bybit snapshot/);
 
@@ -154,6 +159,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     await settle();
     assert.match(firstVerdict(), /^WAIT/);
     assert.match(firstVerdict(), reason);
+    assert.match(dom.readiness.textContent, /^0 READY TO REVIEW/);
   }
   mode = 'healthy';
   now += 10_000;
@@ -192,4 +198,28 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   await settle();
   assert.match(dom.status.textContent, /Scan complete · 24 \/ 24/);
   assert.match(firstVerdict(), /^READY TO REVIEW/);
+});
+
+test('GYLEX mode intersects the observed pairs with eligible Bybit perpetuals', async () => {
+  const symbols = ['BTCUSDT', 'ICNTUSDT', 'SOLUSDT', 'BZUSDT', 'ETHUSDT'];
+  const app = vm.createContext({
+    document: {hidden: true, addEventListener() {}, getElementById() { return {setAttribute() {}}; }},
+    window: {addEventListener() {}},
+    navigator: {onLine: true},
+    location: {search: '?market=gylex'},
+    setInterval() {}, setTimeout, clearTimeout, AbortController, URLSearchParams,
+    async fetch(url) {
+      const instruments = url.includes('/instruments-info?');
+      const list = symbols.map(symbol => instruments ?
+        {symbol, quoteCoin: 'USDT', settleCoin: 'USDT', status: 'Trading',
+          contractType: symbol === 'ETHUSDT' ? 'LinearFutures' : 'LinearPerpetual'} :
+        {symbol, turnover24h: symbol === 'SOLUSDT' ? '500000' : '3000000'});
+      return new Response(JSON.stringify({retCode: 0, time: Date.now(), result: {category: 'linear', list}}),
+        {headers: {'Content-Type': 'application/json'}});
+    }
+  });
+  vm.runInContext(fs.readFileSync('docs/scanner.js', 'utf8'), app);
+  const symbolsFound = await vm.runInContext(
+    "universe('https://api.bybit.com', new AbortController().signal).then(data => data.eligible.map(row => row.symbol))", app);
+  assert.deepEqual([...symbolsFound], ['BTCUSDT', 'ICNTUSDT']);
 });

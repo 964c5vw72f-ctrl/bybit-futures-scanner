@@ -9,6 +9,10 @@ const QUOTE_INTERVAL_MS = 10_000;
 const SCAN_RETRY_MS = 30_000;
 const SCAN_TIMEOUT_MS = 75_000;
 const MARKET = {category: 'linear'};
+const GYLEX_PAIRS = new Set([
+  'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'ICNTUSDT'
+]);
+const gylexMode = new URLSearchParams(location.search).get('market') === 'gylex';
 const $ = id => document.getElementById(id);
 const fmt = n => Number.isFinite(n) ? n.toLocaleString('en-US', {maximumSignificantDigits: 8}) : '—';
 const priceText = n => n.toLocaleString('en-US', {useGrouping: false, maximumFractionDigits: 20});
@@ -68,7 +72,8 @@ async function universe(base, signal) {
     const page = await api(base, 'instruments-info', params, signal);
     for (const row of page.list) {
       if (row.quoteCoin === 'USDT' && row.settleCoin === 'USDT' &&
-          row.contractType === 'LinearPerpetual' && row.status === 'Trading') {
+          row.contractType === 'LinearPerpetual' && row.status === 'Trading' &&
+          (!gylexMode || GYLEX_PAIRS.has(row.symbol))) {
         instruments.add(row.symbol);
       }
     }
@@ -80,7 +85,10 @@ async function universe(base, signal) {
   const eligible = new Map(tickers.list
     .filter(row => instruments.has(row.symbol) && Number.isFinite(num(row.turnover24h)) && num(row.turnover24h) >= 1_000_000)
     .map(row => [row.symbol, row]));
-  if (!eligible.size) throw Error('No eligible USDT perpetuals returned');
+  if (!eligible.size) {
+    throw Error(gylexMode ? 'No GYLEX watchlist pairs passed the Bybit market filters' :
+      'No eligible USDT perpetuals returned');
+  }
   return {base, tickers, eligible: [...eligible.values()]};
 }
 
@@ -226,7 +234,7 @@ function addCard(setup, rank) {
   quotes.append(bidAsk, quoteTime);
   const levels = node('div', '', 'metrics');
   const entry = node('strong');
-  for (const [label, value] of [['Entry quote', entry], ['Stop estimate', node('strong', fmt(setup.stop))],
+  for (const [label, value] of [['Bybit quote', entry], ['Stop estimate', node('strong', fmt(setup.stop))],
     ['Target estimate', node('strong', fmt(setup.target))]]) {
     const cell = node('div');
     cell.append(node('small', label), value);
@@ -259,9 +267,11 @@ function render() {
 
 function updateCards() {
   const snapshot = !pageInactive() && navigator.onLine && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS) ? quoteSnapshot : null;
+  let readyCount = 0;
   for (const setup of signals) {
     const quote = snapshot ? quoteMetrics(snapshot.rows.get(setup.symbol), setup) : null;
     const [label, reason] = verdict(setup, quote);
+    if (label === 'READY TO REVIEW') readyCount++;
     const {flag, bidAsk, quoteTime, entry, market} = setup.card;
     flag.textContent = label + ' · ' + reason;
     flag.className = 'verdict ' + (label === 'READY TO REVIEW' ? 'ready' : label.toLowerCase());
@@ -272,6 +282,12 @@ function updateCards() {
       '% · Funding ' + fmt(quote.funding * 100) + '% · 24h turnover ' + fmt(quote.turnover) +
       ' USDT · Top-of-book ' + fmt(quote.depth) + ' USDT' : '';
   }
+  const readiness = $('readiness');
+  const text = scanBusy ? 'Checking for setups…' : readyCount ?
+    readyCount + ' READY TO REVIEW · Bybit checks passed' :
+    '0 READY TO REVIEW · No displayed setup passes the Bybit checks right now';
+  if (readiness.textContent !== text) readiness.textContent = text;
+  readiness.className = readyCount ? 'ready' : 'muted';
 }
 
 function invalidateQuotes() {
@@ -377,6 +393,8 @@ function tick() {
   }
 }
 
+$(gylexMode ? 'gylex-market' : 'bybit-market').setAttribute('aria-current', 'page');
+$('gylex-note').hidden = !gylexMode;
 $('scan').onclick = scan;
 document.addEventListener('visibilitychange', () => {
   invalidateQuotes();

@@ -11,16 +11,23 @@
 
 *{box-sizing:border-box}body{background:#0b1020;color:#edf2ff;margin:0;font:16px -apple-system,BlinkMacSystemFont,Arial,sans-serif}main{max-width:760px;margin:auto;padding:24px 16px 80px}h1{font-size:28px}h2{margin-top:30px}.muted{color:#a8b4cc;line-height:1.5}button{background:#4385ee;color:white;border:0;border-radius:12px;padding:14px 20px;font-size:16px;font-weight:bold}button:disabled{opacity:.55}article{background:#172137;border:1px solid #354460;border-radius:18px;padding:18px;margin:14px 0}.head{display:flex;justify-content:space-between;align-items:center;gap:10px}.symbol{font-size:22px;font-weight:800;overflow-wrap:anywhere}.long{color:#74e2b1}.short{color:#ff939b}.score{color:#9ec6ff;font-weight:700}.metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:18px 0}.metrics small{display:block;color:#a8b4cc}.metrics strong{font-size:17px;overflow-wrap:anywhere}.live-price{margin:12px 0 2px;padding:12px;border:1px solid #354460;border-radius:12px}.live-price small{display:block;color:#a8b4cc}.live-price strong{font-size:21px;overflow-wrap:anywhere}.live-time{font-size:12px;color:#a8b4cc}.wait{color:#ffc17b}.early{color:#9ec6ff}.ready{color:#74e2b1}.bad{color:#ff939b}details{margin-top:12px;color:#a8b4cc}summary{color:#9ec6ff;cursor:pointer}@media(max-width:360px){.metrics strong{font-size:14px}}
 
+.market-links a{color:#9ec6ff;display:inline-block;padding:8px 0;margin-right:18px}.market-links a[aria-current]{color:#edf2ff;font-weight:700}
 </style>
-<script defer src="./scanner.js?v=3"></script>
+<script defer src="./scanner.js?v=4"></script>
 </head>
 <body>
 <main>
 <h1>Bybit Futures Scanner</h1>
 <p class="muted">Public Bybit data · No API keys or login · USDT perpetuals. Up to 10 LONG and 10 SHORT, ranked by score.</p>
+<nav class="market-links" aria-label="Market filter">
+<a id="bybit-market" href="./">All Bybit pairs</a>
+<a id="gylex-market" href="?market=gylex">GYLEX watchlist</a>
+</nav>
+<p id="gylex-note" class="muted" hidden>8 USDT perpetual pairs observed in GYLEX. Screening, quotes and estimated levels use Bybit data. Check the corresponding contract and quote in GYLEX separately.</p>
 <button id="scan" type="button">Scan now</button>
 <p id="status" class="muted" role="status">Starting…</p>
 <p id="warning" class="wait" role="status"></p>
+<p id="readiness" role="status"></p>
 <div id="results"></div>
 <details>
 <summary>How the scanner works</summary>
