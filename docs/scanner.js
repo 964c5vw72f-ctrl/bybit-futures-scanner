@@ -160,6 +160,22 @@ function rsi(closes, period) {
   return loss === 0 ? (gain === 0 ? 50 : 100) : 100 - 100 / (1 + gain / loss);
 }
 
+function momentumConfirmation(momentum, rsi6, rsi14, volumeRatio) {
+  const long = momentum > 0;
+  const gaps = [];
+  if (!(Math.abs(momentum) > 0.35 && Math.abs(momentum) < 2)) {
+    gaps.push('15m momentum ' + fmt(momentum) + '% (needs ' + (long ? '> +0.35% and < +2%' : '< −0.35% and > −2%') + ')');
+  }
+  if (!(long ? rsi6 >= 52 && rsi6 < 75 : rsi6 > 25 && rsi6 <= 48)) {
+    gaps.push('RSI6 ' + fmt(rsi6) + ' (needs ' + (long ? '≥52 and <75' : '>25 and ≤48') + ')');
+  }
+  if (!(long ? rsi14 >= 50 && rsi14 < 70 : rsi14 > 30 && rsi14 <= 50)) {
+    gaps.push('RSI14 ' + fmt(rsi14) + ' (needs ' + (long ? '≥50 and <70' : '>30 and ≤50') + ')');
+  }
+  if (!(volumeRatio >= 1.4)) gaps.push('5m volume ' + fmt(volumeRatio) + '× (needs ≥1.4×)');
+  return gaps;
+}
+
 function analyze(ticker, rows, close) {
   const candles = rows.map(row => ({
     time: num(row[0]), high: num(row[2]), low: num(row[3]),
@@ -183,9 +199,8 @@ function analyze(ticker, rows, close) {
   const previous = average(volumes.slice(-8, -3));
   const volumeRatio = baseline > 0 ? last.turnover / baseline : 0;
   const buildup = previous > 0 ? average(volumes.slice(-3)) / previous : 0;
-  const confirmedLong = momentum > 0.35 && rsi6 >= 52 && rsi6 < 75 && rsi14 >= 50 && rsi14 < 70;
-  const confirmedShort = momentum < -0.35 && rsi6 > 25 && rsi6 <= 48 && rsi14 > 30 && rsi14 <= 50;
-  const confirmed = volumeRatio >= 1.4 && Math.abs(momentum) < 2 && (confirmedLong || confirmedShort);
+  const confirmationGaps = momentumConfirmation(momentum, rsi6, rsi14, volumeRatio);
+  const confirmed = confirmationGaps.length === 0;
   const earlyLong = momentum > 0 && momentum <= 0.7 && rsi6 >= 48 && rsi6 <= 67 && rsi14 >= 45 && rsi14 <= 62;
   const earlyShort = momentum < 0 && momentum >= -0.7 && rsi6 >= 33 && rsi6 <= 52 && rsi14 >= 38 && rsi14 <= 55;
   if (!confirmed && !(buildup >= 1.3 && (earlyLong || earlyShort))) return null;
@@ -209,7 +224,7 @@ function analyze(ticker, rows, close) {
   const score = Math.round(10 * (Math.min(volumeRatio, 5) * 2 + Math.min(Math.abs(momentum), 1.5) * 2 +
     Math.min(buildup, 3) + (aligned ? 3 : 0) + Math.min(num(ticker.turnover24h) / 10_000_000, 3))) / 10;
 
-  return {symbol: ticker.symbol, side: long ? 'LONG' : 'SHORT', confirmed, baseIssue, score,
+  return {symbol: ticker.symbol, side: long ? 'LONG' : 'SHORT', confirmed, confirmationGaps, baseIssue, score,
     reference: last.close, stop, target, risk, momentum, rsi6, rsi14, volumeRatio, buildup,
     candleTurnover: last.turnover};
 }
@@ -249,7 +264,9 @@ function verdict(setup, quote) {
   if (Math.abs(quote.price - setup.reference) > Math.min(setup.reference * 0.003, setup.risk * 0.5)) {
     return ['WAIT', 'Quote moved away from candle reference'];
   }
-  return setup.confirmed ? ['READY TO REVIEW', 'Screening checks passed'] : ['EARLY', 'Volume buildup · momentum unconfirmed'];
+  if (setup.confirmed) return ['READY TO REVIEW', 'Screening checks passed'];
+  return ['EARLY', setup.confirmationGaps.join(' · ') + ' · Next candle close ' +
+    new Date(scanClose + CANDLE_MS).toLocaleTimeString()];
 }
 
 function node(tag, content, css) {

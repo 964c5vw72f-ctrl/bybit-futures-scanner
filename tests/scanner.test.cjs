@@ -42,11 +42,24 @@ test('stale scan, partial results, missing funding and stale quote fail closed',
     const setup = {reference: 100, risk: 1, confirmed: true};
     const healthy = {price: 100, rr: 2, riskPct: 1, spread: 0.01, depth: 2000, turnover: 4000000, funding: -0.0001};`);
   assert.equal(run('verdict(setup, healthy)[0]'), 'READY TO REVIEW');
-  assert.equal(run('verdict({...setup, confirmed: false}, healthy)[0]'), 'EARLY');
+  const early = run("verdict({...setup, confirmed: false, confirmationGaps: ['5m volume 1.2× (needs ≥1.4×)']}, healthy)");
+  assert.equal(early[0], 'EARLY');
+  assert.match(early[1], /5m volume 1.2× .*Next candle close/);
   assert.equal(run('verdict(setup, null)[0]'), 'WAIT');
   assert.equal(run('verdict(setup, {...healthy, funding: NaN})[0]'), 'WAIT');
   assert.equal(run('incomplete = true; verdict(setup, healthy)[0]'), 'WAIT');
   assert.equal(run('incomplete = false; scanClose -= CANDLE_MS + CLOSE_GRACE_MS; verdict(setup, healthy)[0]'), 'WAIT');
+});
+
+test('confirmation names only the failing checks with their actual values', () => {
+  assert.deepEqual([...run('momentumConfirmation(0.5, 60, 55, 1.4)')], []);
+  assert.deepEqual([...run('momentumConfirmation(-0.5, 40, 45, 1.4)')], []);
+  const gaps = [...run('momentumConfirmation(0.2, 51, 55, 1.2)')];
+  assert.equal(gaps.length, 3);
+  assert.match(gaps[0], /15m momentum 0.2%/);
+  assert.match(gaps[1], /RSI6 51/);
+  assert.match(gaps[2], /5m volume 1.2×/);
+  assert.equal(run('momentumConfirmation(-0.35, 48, 50, 1.4).length'), 1);
 });
 
 test('candles must be contiguous and end at the pinned close', () => {
