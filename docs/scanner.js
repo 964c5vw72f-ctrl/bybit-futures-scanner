@@ -10,7 +10,17 @@ const SCAN_RETRY_MS = 30_000;
 const SCAN_TIMEOUT_MS = 75_000;
 const MARKET = {category: 'linear'};
 const GYLEX_STARTER_PAIRS = [
-  'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'ICNTUSDT'
+  'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT',
+  'LINKUSDT', 'LTCUSDT', 'DOTUSDT', 'BCHUSDT', 'ETCUSDT', 'APTUSDT', 'OPUSDT', 'ARBUSDT',
+  'NEARUSDT', 'UNIUSDT', 'FILUSDT', 'INJUSDT', 'SUIUSDT', 'AAVEUSDT', 'ATOMUSDT', 'TRXUSDT',
+  'ACAUSDT', 'ACCUSDT', 'AGTUSDT', 'AIIUSDT', 'APRUSDT', 'AVAUSDT', 'BATUSDT', 'BERAUSDT',
+  'BRUSDT', 'BTWUSDT', 'CAUSDT', 'CRCLUSDT', 'CS1USDT', 'CS2USDT', 'CXMMUSDT', 'DEXEUSDT',
+  'DSDUSDT', 'ENJUSDT', 'EPICUSDT', 'ERAUSDT', 'FOLKSUSDT', 'GTCUSDT', 'HBARUSDT', 'HUSDT',
+  'HYPEUSDT', 'ICNTUSDT', 'IRYSUSDT', 'LDCUSDT', 'LNDUSDT', 'LSKUSDT', 'LYNUSDT', 'MAGMAUSDT',
+  'MDOUSDT', 'ONEUSDT', 'OPNUSDT', 'OTNUSDT', 'PARTIUSDT', 'PONSUSDT', 'PUMPUSDT', 'QQQUSDT',
+  'QUSDT', 'SAKUSDT', 'SANDUSDT', 'SNDKUSDT', 'SNXXBUSDT', 'SPCXCUSDT', 'STARUSDT', 'STCUSDT',
+  'STRKUSDT', 'TAOUSDT', 'TCUSDT', 'TXUSDT', 'UAIUSDT', 'VVVUSDT', 'ZECUSDT', 'ZEREBROUSDT',
+  'ZROUSDT', '龙虾USDT'
 ];
 const GYLEX_STORAGE_KEY = 'scanner.gylex-pairs';
 const gylexMode = new URLSearchParams(location.search).get('market') === 'gylex';
@@ -36,7 +46,7 @@ let pageSuspended = false;
 
 function parseGylexPairs(text) {
   const tokens = text.trim().toUpperCase().split(/[\s,;]+/);
-  return new Set(tokens.filter(token => /^[A-Z0-9]{1,32}(?:[/-])?USDT$/.test(token))
+  return new Set(tokens.filter(token => /^[\p{L}0-9]{1,32}(?:[/-])?USDT$/u.test(token))
     .map(token => token.replace(/[/-]/, '')));
 }
 
@@ -415,7 +425,7 @@ $('gylex-note').hidden = !gylexMode;
 if (gylexMode) {
   $('gylex-count').textContent = importedGylexPairs.size ?
     'Imported list · ' + gylexPairs.size + ' pairs.' :
-    'Starter list · 8 pairs from the GYLEX screenshot.';
+    'Default list · ' + gylexPairs.size + ' pairs supplied from GYLEX.';
   $('gylex-pairs').value = [...gylexPairs].join('\n');
   $('gylex-form').onsubmit = event => {
     event.preventDefault();

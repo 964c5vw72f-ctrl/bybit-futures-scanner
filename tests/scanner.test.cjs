@@ -207,6 +207,15 @@ test('GYLEX catalog accepts hundreds of symbols and deduplicates pair formats', 
   assert.equal(run('parseGylexPairs(catalogInput).size'), 350);
   assert.equal(run("parseGylexPairs(catalogInput).has('TOKEN349USDT')"), true);
   assert.equal(run("parseGylexPairs('garbage').size"), 0);
+  assert.deepEqual([...run("parseGylexPairs('龙虾/USDT 龙虾USDT')")], ['龙虾USDT']);
+});
+
+test('the default GYLEX list contains the supplied symbols', () => {
+  assert.equal(run('gylexPairs.size'), 82);
+  for (const symbol of ['AVAXUSDT', 'STRKUSDT', 'ZEREBROUSDT', '龙虾USDT']) {
+    context.symbolToCheck = symbol;
+    assert.equal(run('gylexPairs.has(symbolToCheck)'), true);
+  }
 });
 
 test('GYLEX mode intersects the imported pairs with eligible Bybit perpetuals', async () => {
