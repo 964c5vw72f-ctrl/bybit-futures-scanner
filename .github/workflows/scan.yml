@@ -28,8 +28,11 @@ jobs:
           git add output/latest.json
           if ! git diff --cached --quiet; then
             git commit -m "Update published Bybit futures scan [skip ci]"
-            git pull --rebase origin main
-            git push origin HEAD:main
+            for attempt in 1 2 3; do
+              git pull --rebase origin main && git push origin HEAD:main && break
+              if [ "$attempt" -eq 3 ]; then echo 'Publishing failed after 3 attempts'; exit 1; fi
+              sleep 5
+            done
           fi
       - name: Upload scan artifact
         if: always()
@@ -39,3 +42,17 @@ jobs:
           path: output/latest.json
           if-no-files-found: warn
           retention-days: 7
+      - name: Fail workflow when scan data unavailable
+        if: always()
+        run: |
+          python - <<'PY'
+          import json,sys
+          try:
+              with open('output/latest.json', encoding='utf-8') as f: d=json.load(f)
+          except Exception as e:
+              sys.exit(f'Scan output missing: {e}')
+          status=d.get('scan_status','UNKNOWN')
+          print(f'Scan status: {status}; scanned: {d.get("scanned_symbols")}; errors: {len(d.get("errors",[]))}')
+          for e in d.get('errors',[])[:3]: print('ERROR:',e)
+          if status != 'OK': sys.exit(f'Scan incomplete: {status}; refusing to report success')
+          PY
