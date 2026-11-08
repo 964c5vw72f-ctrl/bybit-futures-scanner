@@ -14,12 +14,12 @@
 .market-links a{color:#9ec6ff;display:inline-block;padding:8px 0;margin-right:18px}.market-links a[aria-current]{color:#edf2ff;font-weight:700}
 .pairs-form textarea{box-sizing:border-box;width:100%;display:block;margin:8px 0;padding:10px;font:inherit;color:inherit;background:#172137;border:1px solid #65769a;border-radius:8px}
 </style>
-<script defer src="./scanner.js?v=10"></script>
+<script defer src="./scanner.js?v=11"></script>
 </head>
 <body>
 <main>
 <h1>Bybit Futures Scanner</h1>
-<p class="muted">Public Bybit data · No API keys or login · USDT perpetuals. Up to 10 LONG and 10 SHORT. READY setups appear first, then score ranks each group.</p>
+<p class="muted">Public Bybit data · No API keys or login · USDT perpetuals. Up to 10 LONG and 10 SHORT. READY setups appear first, then EARLY setups. Score ranks each group.</p>
 <nav class="market-links" aria-label="Market filter">
 <a id="bybit-market" href="./">All Bybit pairs</a>
 <a id="gylex-market" href="?market=gylex">GYLEX watchlist</a>
@@ -40,11 +40,12 @@
 <p id="status" class="muted" role="status">Starting…</p>
 <p id="warning" class="wait" role="status"></p>
 <p id="readiness" role="status"></p>
+<p id="quote-source" class="muted"></p>
 <div id="results"></div>
 <details>
 <summary>How the scanner works</summary>
-<p>Bybit LIVE uses the public futures stream. The scanner keeps running in another tab while the browser allows it. If Safari suspends the tab, the scanner refreshes when you return. When the stream is unavailable for a pair, Bybit snapshots refresh every 10 seconds. Indicators refresh after each 5-minute candle closes. Timestamps use your device's time zone.</p>
-<p>EARLY shows which momentum, RSI or volume checks still need confirmation and the next candle close. WAIT means one or more screening checks failed or data is incomplete. READY TO REVIEW means the screening checks passed. Scores rank setups and do not measure probability of profit.</p>
+<p>Bybit LIVE shows the time of the latest ticker message. A ticker update can leave the bid and ask unchanged. Bybit snapshots show the REST response time and refresh every 10 seconds. Timestamps use your device's time zone. Indicators refresh after each 5-minute candle closes. If Safari suspends the page, the scanner refreshes when you return.</p>
+<p>EARLY shows which momentum, RSI or volume checks still need confirmation and the next candle close. READY TO REVIEW means the screening checks passed. The rankings hide WAIT setups until the relevant screening or data checks pass. Scores rank setups and do not measure probability of profit.</p>
 <p>LONG uses the best ask and SHORT uses the best bid. Top-of-book liquidity shows the smaller notional value at the best bid and ask. Stop and target are estimates from candle prices. Quote-based risk/reward excludes fees, slippage and funding payments. The scanner places no orders.</p>
 </details>
 </main>

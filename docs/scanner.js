@@ -8,6 +8,7 @@ const FUTURE_TOLERANCE_MS = 5_000;
 const QUOTE_INTERVAL_MS = 10_000;
 const LIVE_QUOTE_MAX_AGE_MS = 8_000;
 const STREAM_RETRY_MS = 15_000;
+const STREAM_TOPIC_LIMIT = 100;
 const STREAM_URL = 'wss://stream.bybit.com/v5/public/linear';
 const SCAN_RETRY_MS = 30_000;
 const SCAN_TIMEOUT_MS = 75_000;
@@ -45,7 +46,9 @@ let visibleSetups = [];
 let scanClose = 0;
 let incomplete = false;
 let quoteSnapshot = null;
+const latestRestTimes = new Map();
 let stream = null;
+const streamTopics = new Set();
 let streamDeadline = 0;
 let nextStreamAt = 0;
 let nextPingAt = 0;
@@ -328,18 +331,19 @@ function updateCards() {
   const snapshot = active && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS, now) ? quoteSnapshot : null;
   const evaluated = signals.map(setup => {
     const live = active && streamedQuotes.get(setup.symbol);
-    const rest = snapshot?.rows.get(setup.symbol);
-    const useLive = live && fresh(live.time, LIVE_QUOTE_MAX_AGE_MS, now) &&
-      (!rest || live.time >= snapshot.time);
-    const quote = quoteMetrics(useLive ? live.row : rest, setup);
+    const restQuote = quoteMetrics(snapshot?.rows.get(setup.symbol), setup);
+    const streamQuote = live && fresh(live.time, LIVE_QUOTE_MAX_AGE_MS, now) ? quoteMetrics(live.row, setup) : null;
+    const useLive = Boolean(streamQuote && (!restQuote || live.time >= snapshot.time));
+    const quote = useLive ? streamQuote : restQuote;
     const [label, reason] = verdict(setup, quote);
     return {setup, quote, label, reason, time: useLive ? live.time : snapshot?.time, useLive};
   });
   const ready = evaluated.filter(row => row.label === 'READY TO REVIEW');
-  const other = evaluated.filter(row => row.label !== 'READY TO REVIEW');
+  const early = evaluated.filter(row => row.label === 'EARLY');
+  const watch = [...ready, ...early];
   const groups = ['LONG', 'SHORT'].map(side => ({
     side,
-    rows: [...ready, ...other].filter(row => row.setup.side === side).slice(0, 10)
+    rows: watch.filter(row => row.setup.side === side).slice(0, 10)
   }));
   if (scanClose) render(groups);
   for (const {rows} of groups) {
@@ -348,13 +352,21 @@ function updateCards() {
       flag.textContent = label + ' · ' + reason;
       flag.className = 'verdict ' + (label === 'READY TO REVIEW' ? 'ready' : label.toLowerCase());
       bidAsk.textContent = quote ? 'Bid ' + priceText(quote.bid) + ' · Ask ' + priceText(quote.ask) : 'Bid — · Ask —';
-      quoteTime.textContent = quote ? (useLive ? 'Bybit LIVE · ' : 'Bybit snapshot · ') + stamp(time) : 'No fresh bid/ask';
+      const age = Math.max(0, Math.floor((now - time) / 1000));
+      quoteTime.textContent = (useLive ? 'Bybit LIVE · ticker update ' : 'Bybit snapshot · response ') +
+        stamp(time) + ' · ' + age + 's ago';
       entry.textContent = quote ? priceText(quote.price) : '—';
       market.textContent = quote ? 'R:R 1:' + fmt(quote.rr) + ' · Spread ' + fmt(quote.spread) +
         '% · Funding ' + fmt(quote.funding * 100) + '% · 24h turnover ' + fmt(quote.turnover) +
         ' USDT · Top-of-book ' + fmt(quote.depth) + ' USDT' : '';
     }
   }
+  const displayed = groups.flatMap(group => group.rows);
+  const liveCount = displayed.filter(row => row.useLive).length;
+  const source = $('quote-source');
+  const sourceText = displayed.length ? liveCount + ' live · ' +
+    (displayed.length - liveCount) + ' REST snapshots shown' : '';
+  if (source.textContent !== sourceText) source.textContent = sourceText;
   const readiness = $('readiness');
   const readySides = ['LONG', 'SHORT'].map(side => {
     const matches = ready.filter(row => row.setup.side === side);
@@ -362,7 +374,8 @@ function updateCards() {
   });
   const text = scanBusy ? 'Checking for setups…' : ready.length ?
     ready.length + ' READY TO REVIEW · ' + readySides.join(' · ') :
-    '0 READY TO REVIEW · ' + (!scanClose || incomplete || (signals.length && !evaluated.some(row => row.quote)) ?
+    '0 READY TO REVIEW · ' + (!active || !scanClose || incomplete ||
+      now >= scanClose + CANDLE_MS + CLOSE_GRACE_MS || (signals.length && !evaluated.some(row => row.quote)) ?
       'Waiting for complete, fresh Bybit data' : 'No LONG or SHORT passed all Bybit checks');
   if (readiness.textContent !== text) readiness.textContent = text;
   readiness.className = ready.length ? 'ready' : 'muted';
@@ -370,6 +383,7 @@ function updateCards() {
 
 function mergeTicker(previous, message) {
   if (!fresh(message.ts, LIVE_QUOTE_MAX_AGE_MS) || !message.data ||
+      typeof message.data !== 'object' || Array.isArray(message.data) ||
       (previous && message.ts < previous.time)) return null;
   if (message.type === 'snapshot') return {row: message.data, time: message.ts};
   if (message.type === 'delta' && previous) {
@@ -381,10 +395,31 @@ function mergeTicker(previous, message) {
 function stopStream() {
   const socket = stream;
   stream = null;
+  streamTopics.clear();
   streamedQuotes.clear();
   clearTimeout(quotePaint);
   quotePaint = null;
   if (socket && socket.readyState < 2) socket.close();
+}
+
+function syncStreamTopics() {
+  // Reserve room for visible candidates, then keep existing subscriptions to limit churn.
+  const visible = visibleSetups.map(setup => 'tickers.' + setup.symbol);
+  const ranked = signals.slice(0, STREAM_TOPIC_LIMIT).map(setup => 'tickers.' + setup.symbol);
+  const next = new Set([...new Set([...visible, ...streamTopics, ...ranked])].slice(0, STREAM_TOPIC_LIMIT));
+  const removed = [...streamTopics].filter(topic => !next.has(topic));
+  const added = [...next].filter(topic => !streamTopics.has(topic));
+  if (removed.length) {
+    stream.send(JSON.stringify({op: 'unsubscribe', args: removed}));
+    for (const topic of removed) {
+      streamTopics.delete(topic);
+      streamedQuotes.delete(topic.slice('tickers.'.length));
+    }
+  }
+  if (added.length) {
+    stream.send(JSON.stringify({op: 'subscribe', args: added}));
+    for (const topic of added) streamTopics.add(topic);
+  }
 }
 
 function maintainStream() {
@@ -397,9 +432,12 @@ function maintainStream() {
     nextStreamAt = now + STREAM_RETRY_MS;
   }
   if (stream) {
-    if (stream.readyState === 1 && now >= nextPingAt) {
-      stream.send(JSON.stringify({op: 'ping'}));
-      nextPingAt = now + 20_000;
+    if (stream.readyState === 1) {
+      syncStreamTopics();
+      if (now >= nextPingAt) {
+        stream.send(JSON.stringify({op: 'ping'}));
+        nextPingAt = now + 20_000;
+      }
     }
     return;
   }
@@ -413,12 +451,11 @@ function maintainStream() {
   }
   stream = socket;
   streamDeadline = now + 8_000;
-  const topics = new Set(signals.slice(0, 100).map(setup => 'tickers.' + setup.symbol));
   socket.onopen = () => {
     if (stream !== socket) return;
     streamDeadline = Date.now() + 45_000;
     nextPingAt = Date.now() + 20_000;
-    socket.send(JSON.stringify({op: 'subscribe', args: [...topics]}));
+    syncStreamTopics();
   };
   socket.onmessage = event => {
     if (stream !== socket) return;
@@ -430,11 +467,11 @@ function maintainStream() {
     }
     if (!message || typeof message !== 'object') return;
     streamDeadline = Date.now() + 45_000;
-    if (message.op === 'subscribe' && message.success === false) {
+    if ((message.op === 'subscribe' || message.op === 'unsubscribe') && message.success === false) {
       socket.close();
       return;
     }
-    if (!topics.has(message.topic)) return;
+    if (!streamTopics.has(message.topic)) return;
     const symbol = message.topic.slice('tickers.'.length);
     if (message.data?.symbol !== undefined && message.data.symbol !== symbol) return;
     const quote = mergeTicker(streamedQuotes.get(symbol), message);
@@ -470,13 +507,20 @@ function invalidateQuotes() {
 async function refreshQuotes() {
   if (pageSuspended || !navigator.onLine || scanBusy || quoteRequest || !signals.length) return;
   const request = new AbortController();
+  const base = host;
   quoteRequest = request;
   nextQuoteAt = Date.now() + QUOTE_INTERVAL_MS;
   try {
-    const snapshot = await api(host, 'tickers', MARKET, request.signal);
+    const snapshot = await api(base, 'tickers', MARKET, request.signal);
     if (quoteRequest !== request) return;
     if (!snapshot.list.length) throw Error('Empty ticker snapshot');
+    if (snapshot.time < (latestRestTimes.get(base) ?? 0)) {
+      quoteIssue = 'Bybit returned an older quote snapshot';
+      if (!incomplete) $('warning').textContent = quoteIssue + ' · Ignored';
+      return;
+    }
     quoteSnapshot = {time: snapshot.time, rows: new Map(snapshot.list.map(row => [row.symbol, row]))};
+    latestRestTimes.set(base, snapshot.time);
     quoteIssue = '';
     if (!incomplete) $('warning').textContent = '';
   } catch (error) {
@@ -562,8 +606,8 @@ function tick() {
   if (navigator.onLine && !scanBusy && Date.now() >= nextScanAt) {
     scan();
   } else {
-    maintainStream();
     updateCards();
+    maintainStream();
     if (Date.now() >= nextQuoteAt) refreshQuotes();
   }
 }

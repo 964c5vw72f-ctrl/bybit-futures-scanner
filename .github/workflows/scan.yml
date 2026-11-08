@@ -23,6 +23,25 @@ jobs:
       - run: node --check docs/scanner.js && node --test tests/scanner.test.cjs
       - run: python -m py_compile scanner.py
 
+  published-browser:
+    if: github.event_name == 'push'
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: scanner-pages-browser
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm install --prefix "$RUNNER_TEMP/scanner-browser" --no-save playwright@1.58.2
+      - run: |
+          "$RUNNER_TEMP/scanner-browser/node_modules/.bin/playwright" install --with-deps webkit
+      - name: Verify published files and scanner states in mobile WebKit
+        run: NODE_PATH="$RUNNER_TEMP/scanner-browser/node_modules" node tests/published-browser.cjs https://964c5vw72f-ctrl.github.io/bybit-futures-scanner/
+
   scan:
     if: github.event_name == 'workflow_dispatch'
     needs: checks

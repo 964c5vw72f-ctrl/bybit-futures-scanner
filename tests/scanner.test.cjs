@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const test = require('node:test');
 const vm = require('node:vm');
+const {candles} = require('./bybit-fixture.cjs');
 
 const context = vm.createContext({
   document: {hidden: true, addEventListener() {}, getElementById() { return {setAttribute() {}}; }},
@@ -81,7 +82,8 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
       setAttribute(name, value) { this[name] = value; }
     };
   }
-  const dom = Object.fromEntries(['scan', 'status', 'warning', 'results', 'readiness', 'bybit-market', 'gylex-market', 'gylex-note'].map(id => [id, element()]));
+  const dom = Object.fromEntries(['scan', 'status', 'warning', 'results', 'readiness', 'quote-source',
+    'bybit-market', 'gylex-market', 'gylex-note'].map(id => [id, element()]));
   const firstClose = 1_800_000_000_000;
   let now = firstClose + 120_000;
   let expectedClose = firstClose;
@@ -124,16 +126,11 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
         if (mode === 'partial' && symbol === 'L0') return {ok: false, status: 503};
         const end = Number(params.get('end')) + 1;
         assert.equal(end, expectedClose);
-        const direction = symbol.startsWith('L') ? 1 : -1;
-        const levels = Array.from({length: 42}, (_, i) => 100 + direction * (i % 2) * 0.2);
-        levels[41] = 100;
-        levels.push(...[0.2, 0.4, 0.6].map(offset => 100 + direction * offset));
         result.symbol = symbol;
-        result.list = levels.map((price, i) => [
-          end - (45 - i) * 300_000, price, price + 0.4, price - 0.4, price, 10, i >= 42 ? 2300 : 1000
-        ]).reverse();
+        result.list = candles(symbol, end);
       }
-      const time = mode === 'stale' && endpoint === 'tickers' ? now - 60_000 : now;
+      const quoteAge = mode === 'stale' ? 60_000 : mode === 'older snapshot' ? 20_000 : 0;
+      const time = endpoint === 'tickers' ? now - quoteAge : now;
       return new Response(JSON.stringify({retCode: 0, time, result}), {
         headers: {'Content-Type': 'application/json'}
       });
@@ -147,6 +144,8 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   };
   const firstCard = () => dom.results.children[1];
   const firstVerdict = () => firstCard().children[2].textContent;
+  const cards = () => dom.results.children.filter(el => el.dataset.symbol);
+  const currentVerdict = () => [...read('verdict(signals[0], quoteMetrics(quoteSnapshot?.rows.get(signals[0].symbol), signals[0]))')];
   read('document.hidden = false; navigator.onLine = true');
   tick();
   await settle();
@@ -164,7 +163,8 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(firstVerdict(), /^READY TO REVIEW/);
   assert.match(dom.readiness.textContent, /^24 READY TO REVIEW/);
   assert.match(firstCard().children[3].children[0].textContent, /Bid 100.595 · Ask 100.605/);
-  assert.match(firstCard().children[3].children[1].textContent, /^Bybit snapshot/);
+  assert.match(firstCard().children[3].children[1].textContent, /^Bybit snapshot · response .* · 0s ago$/);
+  assert.equal(dom['quote-source'].textContent, '0 live · 20 REST snapshots shown');
 
   mode = 'only low score ready';
   now += 10_000;
@@ -173,7 +173,16 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(dom.readiness.textContent, /^2 READY TO REVIEW · LONG L0 \(1\) · SHORT S0 \(1\)$/);
   assert.equal(firstCard().dataset.symbol, 'L0');
   assert.match(firstVerdict(), /^READY TO REVIEW/);
-  assert.equal(dom.results.children[12].dataset.symbol, 'S0');
+  assert.deepEqual(cards().map(card => card.dataset.symbol), ['L0', 'S0']);
+
+  const acceptedTime = read('quoteSnapshot.time');
+  mode = 'older snapshot';
+  now += 10_000;
+  tick();
+  await settle();
+  assert.equal(read('quoteSnapshot.time'), acceptedTime);
+  assert.deepEqual(cards().map(card => card.dataset.symbol), ['L0', 'S0']);
+  assert.match(dom.warning.textContent, /older quote snapshot · Ignored/);
 
   for (const [failure, reason] of [['missing funding', /Funding unavailable/],
     ['stale', /Bybit quote refresh failed/], ['HTTP failure', /Bybit quote refresh failed/]]) {
@@ -181,8 +190,9 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     now += 10_000;
     tick();
     await settle();
-    assert.match(firstVerdict(), /^WAIT/);
-    assert.match(firstVerdict(), reason);
+    assert.equal(currentVerdict()[0], 'WAIT');
+    assert.match(currentVerdict()[1], reason);
+    assert.equal(cards().length, 0);
     assert.match(dom.readiness.textContent, /^0 READY TO REVIEW/);
   }
   mode = 'healthy';
@@ -192,12 +202,12 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(firstVerdict(), /^READY TO REVIEW/);
 
   events.pagehide();
-  assert.match(firstVerdict(), /^WAIT · Page paused/);
-  assert.equal(firstCard().children[3].children[1].textContent, 'No fresh bid/ask');
+  assert.deepEqual(currentVerdict(), ['WAIT', 'Page paused']);
+  assert.equal(cards().length, 0);
   now += 60_000;
   tick();
   await settle();
-  assert.match(firstVerdict(), /^WAIT · Page paused/);
+  assert.deepEqual(currentVerdict(), ['WAIT', 'Page paused']);
   events.pageshow({persisted: true});
   await settle();
   assert.match(firstVerdict(), /^READY TO REVIEW/);
@@ -214,7 +224,8 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   now = expectedClose + 2500;
   const previousCard = firstCard();
   tick();
-  assert.match(firstVerdict(), /^WAIT · Scan in progress/);
+  assert.deepEqual(currentVerdict(), ['WAIT', 'Scan in progress']);
+  assert.equal(cards().length, 0);
   await settle();
   assert.notEqual(firstCard(), previousCard);
   assert.equal(read('scanClose'), expectedClose);
@@ -222,14 +233,15 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
 
   read('document.hidden = false');
   events.visibilitychange();
-  assert.match(firstVerdict(), /^WAIT · Bybit quote unavailable or stale/);
+  assert.deepEqual(currentVerdict(), ['WAIT', 'Bybit quote unavailable or stale']);
   await settle();
   assert.match(firstVerdict(), /^READY TO REVIEW/);
   mode = 'partial';
   await dom.scan.onclick();
   await settle();
   assert.match(dom.status.textContent, /Partial scan · 23 \/ 24/);
-  assert.match(firstVerdict(), /^WAIT · Incomplete candle scan/);
+  assert.deepEqual(currentVerdict(), ['WAIT', 'Incomplete candle scan']);
+  assert.equal(cards().length, 0);
   mode = 'healthy';
   now += 30_000;
   tick();
@@ -264,9 +276,51 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   sendTicker('delta', {ask1Price: '101'}, now - 1);
   tick();
   assert.match(book.children[0].textContent, /Ask 100.607$/);
+  assert.match(book.children[1].textContent, /^Bybit LIVE · ticker update .* · 0s ago$/);
+  sendTicker('delta', {ask1Price: '99'});
+  tick();
+  assert.match(book.children[1].textContent, /^Bybit snapshot/);
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+  sendTicker('delta', {ask1Price: '100.607'});
+  tick();
+  assert.match(book.children[1].textContent, /^Bybit LIVE/);
+  now += 8_000;
+  read('updateCards()');
+  assert.match(book.children[1].textContent, /^Bybit snapshot/);
+  now += 17_000;
+  read('updateCards()');
+  assert.equal(cards().length, 0);
+  tick();
+  await settle();
+  sendTicker('delta', {ask1Price: '100.607'});
+  tick();
   assert.match(book.children[1].textContent, /^Bybit LIVE/);
   socket.close();
   assert.match(book.children[1].textContent, /^Bybit snapshot/);
+
+  // A setup ranked outside the initial subscription cap can become visible.
+  read(`const sample = signals.find(setup => setup.symbol === '${symbol}');
+    const bookRow = quoteSnapshot.rows.get(sample.symbol);
+    const waiting = Array.from({length: 100}, (_, i) => ({
+      ...sample, card: undefined, symbol: 'WAIT' + i, score: 200 - i, baseIssue: 'Screening failed'
+    }));
+    const early = {...sample, card: undefined, symbol: 'EARLY', score: 1, confirmed: false,
+      confirmationGaps: ['5m volume']};
+    signals = [...waiting, early];
+    nextStreamAt = 0;
+    updateCards();
+    maintainStream();`);
+  socket.readyState = 1;
+  socket.onopen();
+  assert.equal(sent.at(-1).args.length, 100);
+  assert(!sent.at(-1).args.includes('tickers.EARLY'));
+  read(`quoteSnapshot.rows.set('EARLY', bookRow); updateCards(); maintainStream();`);
+  assert.deepEqual(cards().map(card => card.dataset.symbol), ['EARLY']);
+  assert.match(firstVerdict(), /^EARLY · 5m volume/);
+  assert.equal(sent.at(-2).op, 'unsubscribe');
+  assert.deepEqual(sent.at(-1), {op: 'subscribe', args: ['tickers.EARLY']});
+  assert.equal(read('streamTopics.size'), 100);
+  socket.close();
 });
 
 test('GYLEX catalog accepts hundreds of symbols and deduplicates pair formats', () => {
