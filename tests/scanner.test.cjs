@@ -83,6 +83,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     };
   }
   const dom = Object.fromEntries(['scan', 'status', 'warning', 'results', 'readiness', 'quote-source',
+    'reference-book', 'reference-time', 'quote-warning',
     'bybit-market', 'gylex-market', 'gylex-note'].map(id => [id, element()]));
   const firstClose = 1_800_000_000_000;
   let now = firstClose + 120_000;
@@ -90,6 +91,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   const events = {};
   const symbols = ['L', 'S'].flatMap(side => Array.from({length: 12}, (_, i) => side + i));
   let mode = 'healthy';
+  let heldCandles;
   let tick;
   class Clock extends Date {
     constructor(...args) { super(...(args.length ? args : [now])); }
@@ -103,7 +105,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     location: {search: ''},
     setInterval: callback => { tick = callback; },
     setTimeout, clearTimeout, AbortController, URL, URLSearchParams, Date: Clock,
-    async fetch(url) {
+    async fetch(url, options) {
       const {pathname, searchParams: params} = new URL(url);
       const endpoint = pathname.split('/').at(-1);
       const result = {category: 'linear'};
@@ -120,10 +122,16 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
             bid1Price: (reference - 0.005).toFixed(3), ask1Price: (reference + 0.005).toFixed(3),
             bid1Size: '100', ask1Size: '100'};
         });
+        result.list.push({symbol: 'BTCUSDT', bid1Price: '79999', ask1Price: '80001'});
       } else {
         assert.equal(endpoint, 'kline');
         const symbol = params.get('symbol');
         if (mode === 'partial' && symbol === 'L0') return {ok: false, status: 503};
+        if (heldCandles) {
+          await Promise.race([heldCandles, new Promise((_, reject) => {
+            options.signal.addEventListener('abort', () => reject(Error('Cancelled fixture request')), {once: true});
+          })]);
+        }
         const end = Number(params.get('end')) + 1;
         assert.equal(end, expectedClose);
         result.symbol = symbol;
@@ -140,7 +148,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   const read = code => vm.runInContext(code, app);
   const settle = async () => {
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(read('scanBusy || !!quoteRequest'), false);
+    assert.equal(read('!!(scanRequest || quoteRequest)'), false);
   };
   const firstCard = () => dom.results.children[1];
   const firstVerdict = () => firstCard().children[2].textContent;
@@ -165,6 +173,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(firstCard().children[3].children[0].textContent, /Bid 100.595 · Ask 100.605/);
   assert.match(firstCard().children[3].children[1].textContent, /^Bybit snapshot · response .* · 0s ago$/);
   assert.equal(dom['quote-source'].textContent, '0 live · 20 REST snapshots shown');
+  assert.equal(dom['reference-book'].textContent, 'Bid 79999 · Ask 80001');
 
   mode = 'only low score ready';
   now += 10_000;
@@ -182,7 +191,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   await settle();
   assert.equal(read('quoteSnapshot.time'), acceptedTime);
   assert.deepEqual(cards().map(card => card.dataset.symbol), ['L0', 'S0']);
-  assert.match(dom.warning.textContent, /older quote snapshot · Ignored/);
+  assert.match(dom['quote-warning'].textContent, /older quote snapshot · Ignored/);
 
   for (const [failure, reason] of [['missing funding', /Funding unavailable/],
     ['stale', /Bybit quote refresh failed/], ['HTTP failure', /Bybit quote refresh failed/]]) {
@@ -223,9 +232,21 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   expectedClose += 300_000;
   now = expectedClose + 2500;
   const previousCard = firstCard();
+  let releaseCandles;
+  heldCandles = new Promise(resolve => { releaseCandles = resolve; });
   tick();
   assert.deepEqual(currentVerdict(), ['WAIT', 'Scan in progress']);
   assert.equal(cards().length, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(dom['reference-time'].textContent, /^Bybit snapshot/);
+  now += 10_000;
+  tick();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(read('quoteSnapshot.time'), now);
+  assert.equal(read('!!scanRequest'), true);
+  assert.match(dom['reference-time'].textContent, /^Bybit snapshot .* · 0s ago$/);
+  heldCandles = null;
+  releaseCandles();
   await settle();
   assert.notEqual(firstCard(), previousCard);
   assert.equal(read('scanClose'), expectedClose);
@@ -236,6 +257,19 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.deepEqual(currentVerdict(), ['WAIT', 'Bybit quote unavailable or stale']);
   await settle();
   assert.match(firstVerdict(), /^READY TO REVIEW/);
+
+  heldCandles = new Promise(() => {});
+  const interruptedScan = dom.scan.onclick();
+  await new Promise(resolve => setImmediate(resolve));
+  events.pagehide();
+  await interruptedScan;
+  assert.equal(read('!!scanRequest'), false);
+  assert.equal(dom['reference-book'].textContent, 'Bid — · Ask —');
+  heldCandles = null;
+  events.pageshow({persisted: true});
+  await settle();
+  assert.match(firstVerdict(), /^READY TO REVIEW/);
+
   mode = 'partial';
   await dom.scan.onclick();
   await settle();
@@ -266,6 +300,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   const symbol = firstCard().dataset.symbol;
   const book = firstCard().children[3];
   assert(sent[0].args.includes('tickers.' + symbol));
+  assert(sent[0].args.includes('tickers.BTCUSDT'));
   const sendTicker = (type, data, ts = now) =>
     socket.onmessage({data: JSON.stringify({topic: 'tickers.' + symbol, type, ts, data})});
   sendTicker('delta', {ask1Price: '101'});

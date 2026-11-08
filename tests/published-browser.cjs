@@ -13,6 +13,7 @@ const quotes = symbols.map((symbol, index) => {
   return {symbol, bid1Price: String(reference - 0.005), ask1Price: String(reference + 0.005),
     bid1Size: '100', ask1Size: '100', turnover24h: '5000000', fundingRate: '0'};
 });
+const reference = {symbol: 'BTCUSDT', bid1Price: '79999', ask1Price: '80001'};
 
 async function waitForPublishedFiles() {
   const [html, script] = await Promise.all([
@@ -43,6 +44,8 @@ async function waitForPublishedFiles() {
 
 async function checkBrowser() {
   const browser = await webkit.launch();
+  let resumeCandles;
+  const holdCandles = new Promise(resolve => { resumeCandles = resolve; });
   try {
     const page = await browser.newPage(devices['iPhone 15']);
     page.setDefaultTimeout(10_000);
@@ -57,28 +60,44 @@ async function checkBrowser() {
           ({symbol, quoteCoin: 'USDT', settleCoin: 'USDT', contractType: 'LinearPerpetual', status: 'Trading'}));
       } else if (endpoint === 'tickers') {
         if (failRest) return route.fulfill({status: 503});
-        result.list = quotes;
+        result.list = [...quotes, reference];
       } else {
         assert.equal(endpoint, 'kline');
         result.symbol = searchParams.get('symbol');
         const end = Number(searchParams.get('end')) + 1;
         assert.equal(end, close);
         result.list = candles(result.symbol, end);
+        await holdCandles;
       }
       return route.fulfill({
         headers: {'access-control-allow-origin': '*'},
         json: {retCode: 0, time: await page.evaluate(() => Date.now()), result}
       });
     });
-    let tickerSocket;
+    let tickerSocket, referenceSocket;
     await page.routeWebSocket('wss://stream.bybit.com/v5/public/linear', socket => {
       socket.onMessage(message => {
         const {op, args} = JSON.parse(message);
         if (op === 'subscribe' && args.includes('tickers.' + symbols[0])) tickerSocket = socket;
+        if (op === 'subscribe' && args.includes('tickers.BTCUSDT')) referenceSocket = socket;
       });
     });
 
     await page.goto(published.href);
+    const referenceTime = page.locator('#reference-time');
+    await referenceTime.filter({hasText: /^Bybit snapshot/}).waitFor();
+    assert(await page.locator('#scan').isDisabled());
+    const referenceDeadline = Date.now() + 5000;
+    while (!referenceSocket && Date.now() < referenceDeadline) await delay(50);
+    assert(referenceSocket, 'Browser did not subscribe to BTCUSDT during the scan');
+    referenceSocket.send(JSON.stringify({
+      topic: 'tickers.BTCUSDT', type: 'snapshot', ts: await page.evaluate(() => Date.now()),
+      data: {...reference, ask1Price: '80002'}
+    }));
+    await referenceTime.filter({hasText: /^Bybit LIVE/}).waitFor();
+    assert.equal(await page.locator('#reference-book').textContent(), 'Bid 79999 · Ask 80002');
+    assert(await page.locator('#scan').isDisabled());
+    resumeCandles();
     await page.getByText('2 READY TO REVIEW', {exact: false}).waitFor();
     assert.deepEqual(await page.locator('#results h2').allTextContents(), ['Top LONG', 'Top SHORT']);
     assert.deepEqual(await page.locator('#results article .symbol').allTextContents(),
@@ -98,9 +117,11 @@ async function checkBrowser() {
     failRest = true;
     await page.clock.fastForward(11_000);
     await page.getByText('Bybit quote refresh failed', {exact: false}).waitFor();
+    assert.equal(await page.locator('#reference-book').textContent(), 'Bid — · Ask —');
     assert.equal(await page.locator('#results article').count(), 0);
     assert.match(await page.locator('#readiness').textContent(), /^0 READY TO REVIEW/);
   } finally {
+    resumeCandles();
     await browser.close();
   }
 }
@@ -108,7 +129,7 @@ async function checkBrowser() {
 (async () => {
   await waitForPublishedFiles();
   await checkBrowser();
-  console.log('Published assets match checkout. WebKit verified LONG/SHORT and LIVE → snapshot → WAIT with simulated Bybit data.');
+  console.log('Published assets match checkout. WebKit verified continuous quotes during a scan, LONG/SHORT ranking and quote failover with simulated Bybit data.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

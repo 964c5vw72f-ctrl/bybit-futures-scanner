@@ -14,7 +14,7 @@
 .market-links a{color:#9ec6ff;display:inline-block;padding:8px 0;margin-right:18px}.market-links a[aria-current]{color:#edf2ff;font-weight:700}
 .pairs-form textarea{box-sizing:border-box;width:100%;display:block;margin:8px 0;padding:10px;font:inherit;color:inherit;background:#172137;border:1px solid #65769a;border-radius:8px}
 </style>
-<script defer src="./scanner.js?v=11"></script>
+<script defer src="./scanner.js?v=12"></script>
 </head>
 <body>
 <main>
@@ -36,6 +36,12 @@
 </form>
 </details>
 </div>
+<section class="live-price" aria-label="BTCUSDT Bybit market reference">
+<small>BTCUSDT · Bybit market reference</small>
+<strong id="reference-book">Bid — · Ask —</strong>
+<div id="reference-time" class="live-time">Waiting for fresh Bybit quotes</div>
+</section>
+<p id="quote-warning" class="wait" role="status"></p>
 <button id="scan" type="button">Scan now</button>
 <p id="status" class="muted" role="status">Starting…</p>
 <p id="warning" class="wait" role="status"></p>
@@ -44,7 +50,7 @@
 <div id="results"></div>
 <details>
 <summary>How the scanner works</summary>
-<p>Bybit LIVE shows the time of the latest ticker message. A ticker update can leave the bid and ask unchanged. Bybit snapshots show the REST response time and refresh every 10 seconds. Timestamps use your device's time zone. Indicators refresh after each 5-minute candle closes. If Safari suspends the page, the scanner refreshes when you return.</p>
+<p>Bybit LIVE shows the time of the latest ticker message. A ticker update can leave the bid and ask unchanged. Bybit snapshots show the REST response time and refresh every 10 seconds. The BTCUSDT reference keeps updating during scans and when there are no qualifying setups. RSI, momentum and candle volume refresh after each 5-minute candle closes. If Safari suspends the page, the scanner refreshes when you return.</p>
 <p>EARLY shows which momentum, RSI or volume checks still need confirmation and the next candle close. READY TO REVIEW means the screening checks passed. The rankings hide WAIT setups until the relevant screening or data checks pass. Scores rank setups and do not measure probability of profit.</p>
 <p>LONG uses the best ask and SHORT uses the best bid. Top-of-book liquidity shows the smaller notional value at the best bid and ask. Stop and target are estimates from candle prices. Quote-based risk/reward excludes fees, slippage and funding payments. The scanner places no orders.</p>
 </details>
