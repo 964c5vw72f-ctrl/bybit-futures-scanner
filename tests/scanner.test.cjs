@@ -80,10 +80,11 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
       children: [], dataset: {},
       append(...children) { this.children.push(...children); },
       replaceChildren() { this.children = []; },
-      setAttribute(name, value) { this[name] = value; }
+      setAttribute(name, value) { this[name] = value; },
+      removeAttribute(name) { delete this[name]; }
     };
   }
-  const dom = Object.fromEntries(['scan', 'status', 'warning', 'results', 'readiness', 'quote-source',
+  const dom = Object.fromEntries(['scan', 'refresh', 'scan-progress', 'scan-schedule', 'status', 'warning', 'results', 'readiness', 'quote-source',
     'reference-book', 'reference-time', 'quote-warning',
     'bybit-market', 'gylex-market', 'gylex-note'].map(id => [id, element()]));
   const firstClose = 1_800_000_000_000;
@@ -182,6 +183,14 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(firstCard().children[3].children[1].textContent, /^Bybit snapshot · response .* · 0s ago$/);
   assert.equal(dom['quote-source'].textContent, '0 live · 20 REST snapshots shown');
   assert.equal(dom['reference-book'].textContent, 'Bid 79999 · Ask 80001');
+  assert.equal(dom['scan-progress'].hidden, true);
+  assert.match(dom['scan-schedule'].textContent, /Next scan in .* · Next snapshot in 10s/);
+  now += 1_000;
+  const manualRefresh = dom.refresh.onclick();
+  assert.equal(dom.refresh.disabled, true);
+  await manualRefresh;
+  assert.equal(dom.refresh.disabled, false);
+  assert.equal(read('quoteSnapshot.time'), now);
 
   mode = 'only low score ready';
   now += 10_000;
@@ -246,6 +255,8 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.deepEqual(currentVerdict(), ['WAIT', 'Scan in progress']);
   assert.equal(cards().length, 0);
   await new Promise(resolve => setImmediate(resolve));
+  assert.equal(dom['scan-progress'].hidden, false);
+  assert.equal(dom['scan-progress'].max, 24);
   assert.match(dom['reference-time'].textContent, /^Bybit snapshot/);
   now += 10_000;
   tick();

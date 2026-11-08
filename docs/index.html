@@ -13,8 +13,15 @@
 
 .market-links a{color:#9ec6ff;display:inline-block;padding:8px 0;margin-right:18px}.market-links a[aria-current]{color:#edf2ff;font-weight:700}
 .pairs-form textarea{box-sizing:border-box;width:100%;display:block;margin:8px 0;padding:10px;font:inherit;color:inherit;background:#172137;border:1px solid #65769a;border-radius:8px}
+.scan-bar{margin-top:12px;padding:12px;background:#172137;border:1px solid #354460;border-radius:14px}
+.scan-actions{display:flex;flex-wrap:wrap;gap:8px}
+.scan-actions button{flex:1;padding:12px;white-space:nowrap}
+.scan-actions #refresh{background:#263854}
+.scan-bar progress{width:100%;height:8px;accent-color:#74e2b1}
+.scan-bar p{margin:8px 0 0;font-size:13px}
+.scan-bar p:empty{display:none}
 </style>
-<script defer src="./scanner.js?v=13"></script>
+<script defer src="./scanner.js?v=15"></script>
 </head>
 <body>
 <main>
@@ -36,10 +43,17 @@
 </form>
 </details>
 </div>
-<p id="quote-warning" class="wait" role="status"></p>
+<section class="scan-bar" aria-label="Scanner controls">
+<div class="scan-actions">
 <button id="scan" type="button">Scan now</button>
+<button id="refresh" type="button" disabled>Refresh quotes</button>
+</div>
+<progress id="scan-progress" aria-label="Candle scan progress" hidden></progress>
 <p id="status" class="muted" role="status">Starting…</p>
+<p id="scan-schedule" class="muted"></p>
 <p id="warning" class="wait" role="status"></p>
+<p id="quote-warning" class="wait" role="status"></p>
+</section>
 <p id="readiness" role="status"></p>
 <p id="quote-source" class="muted"></p>
 <div id="results"></div>

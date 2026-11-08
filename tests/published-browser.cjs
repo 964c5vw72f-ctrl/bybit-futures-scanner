@@ -90,6 +90,8 @@ async function checkBrowser() {
     await details.click();
     await referenceTime.filter({hasText: /^Bybit snapshot/}).waitFor();
     assert(await page.locator('#scan').isDisabled());
+    assert(await page.getByRole('progressbar', {name: 'Candle scan progress'}).isVisible());
+    assert(await page.getByRole('button', {name: 'Refresh quotes'}).isEnabled());
     const referenceDeadline = Date.now() + 5000;
     while (!referenceSocket && Date.now() < referenceDeadline) await delay(50);
     assert(referenceSocket, 'Browser did not subscribe to BTCUSDT during the scan');
@@ -104,6 +106,7 @@ async function checkBrowser() {
     assert.equal(await referenceTime.isVisible(), false);
     resumeCandles();
     await page.getByText('2 READY TO REVIEW', {exact: false}).waitFor();
+    assert.equal(await page.locator('#scan-progress').isVisible(), false);
     assert.deepEqual(await page.locator('#results h2').allTextContents(), ['Top LONG', 'Top SHORT']);
     assert.deepEqual(await page.locator('#results article .symbol').allTextContents(),
       [symbols[0] + ' · LONG', symbols[1] + ' · SHORT']);

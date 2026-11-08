@@ -362,8 +362,31 @@ function paintQuote(bidAsk, quoteTime, selected, now) {
     stamp(time) + ' · ' + age + 's ago';
 }
 
+function paintControls(now) {
+  const online = navigator.onLine && !pageSuspended;
+  $('scan').disabled = !online || Boolean(scanRequest);
+  $('scan-progress').hidden = !scanRequest;
+  const refresh = $('refresh');
+  refresh.disabled = !online || !host || Boolean(quoteRequest);
+  const label = quoteRequest ? 'Refreshing…' : 'Refresh quotes';
+  if (refresh.textContent !== label) refresh.textContent = label;
+
+  const schedule = [];
+  if (online && !scanRequest && nextScanAt) {
+    const seconds = Math.max(0, Math.ceil((nextScanAt - now) / 1000));
+    schedule.push('Next scan in ' + Math.floor(seconds / 60) + 'm ' + seconds % 60 + 's');
+  }
+  if (online && host && !quoteRequest) {
+    schedule.push('Next snapshot in ' + Math.max(0, Math.ceil((nextQuoteAt - now) / 1000)) + 's');
+  }
+  const status = $('scan-schedule');
+  const text = schedule.join(' · ');
+  if (status.textContent !== text) status.textContent = text;
+}
+
 function updateCards() {
   const now = Date.now();
+  paintControls(now);
   const active = !pageSuspended && navigator.onLine;
   const snapshot = active && quoteSnapshot && fresh(quoteSnapshot.time, QUOTE_MAX_AGE_MS, now) ? quoteSnapshot : null;
   paintQuote($('reference-book'), $('reference-time'), selectQuote(MARKET_REFERENCE, snapshot, now, active), now);
@@ -560,6 +583,7 @@ async function refreshQuotes() {
   const previousSnapshot = quoteSnapshot;
   quoteRequest = request;
   nextQuoteAt = Date.now() + QUOTE_INTERVAL_MS;
+  paintControls(Date.now());
   try {
     const snapshot = await api(base, 'tickers', MARKET, request.signal);
     if (quoteRequest !== request) return;
@@ -582,7 +606,12 @@ async function refreshQuotes() {
 async function scanCandles(base, eligible, close, request) {
   const found = [];
   const failures = new Map();
+  const progress = $('scan-progress');
   let checked = 0;
+  if (eligible.length) {
+    progress.max = eligible.length;
+    progress.value = 0;
+  }
 
   async function scanBatch(batch, retrying) {
     let next = 0, done = 0;
@@ -601,6 +630,7 @@ async function scanCandles(base, eligible, close, request) {
           failures.set(ticker, ticker.symbol + ' · ' + error.message);
         }
         done++;
+        if (scanRequest === request) progress.value = checked;
         if (!retrying && scanRequest === request && (done === 1 || done % 15 === 0)) {
           $('status').textContent = 'Scanning ' + done + ' / ' + eligible.length + ' contracts…';
         }
@@ -620,7 +650,7 @@ async function scan() {
   if (scanRequest || pageSuspended || !navigator.onLine) return;
   const request = new AbortController();
   scanRequest = request;
-  $('scan').disabled = true;
+  $('scan-progress').removeAttribute('value');
   $('warning').textContent = '';
   $('status').textContent = 'Connecting to the Bybit public API…';
   updateCards();
@@ -665,7 +695,6 @@ async function scan() {
     clearTimeout(timeout);
     if (scanRequest === request) {
       scanRequest = null;
-      $('scan').disabled = false;
       updateCards();
       maintainStream();
     }
@@ -678,7 +707,6 @@ function cancelScan() {
   scanRequest = null;
   request.abort();
   nextScanAt = 0;
-  $('scan').disabled = false;
 }
 
 function tick() {
@@ -716,6 +744,7 @@ if (gylexMode) {
   };
 }
 $('scan').onclick = scan;
+$('refresh').onclick = refreshQuotes;
 document.addEventListener('visibilitychange', () => {
   // Keep scanning in a hidden tab while the browser lets it run.
   if (document.hidden) return;
