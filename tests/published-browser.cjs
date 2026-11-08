@@ -85,6 +85,9 @@ async function checkBrowser() {
 
     await page.goto(published.href);
     const referenceTime = page.locator('#reference-time');
+    const details = page.getByText('How the scanner works', {exact: true});
+    assert.equal(await referenceTime.isVisible(), false);
+    await details.click();
     await referenceTime.filter({hasText: /^Bybit snapshot/}).waitFor();
     assert(await page.locator('#scan').isDisabled());
     const referenceDeadline = Date.now() + 5000;
@@ -97,6 +100,8 @@ async function checkBrowser() {
     await referenceTime.filter({hasText: /^Bybit LIVE/}).waitFor();
     assert.equal(await page.locator('#reference-book').textContent(), 'Bid 79999 · Ask 80002');
     assert(await page.locator('#scan').isDisabled());
+    await details.click();
+    assert.equal(await referenceTime.isVisible(), false);
     resumeCandles();
     await page.getByText('2 READY TO REVIEW', {exact: false}).waitFor();
     assert.deepEqual(await page.locator('#results h2').allTextContents(), ['Top LONG', 'Top SHORT']);
