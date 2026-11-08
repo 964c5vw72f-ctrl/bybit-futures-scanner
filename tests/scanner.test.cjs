@@ -71,6 +71,7 @@ test('candles must be contiguous and end at the pinned close', () => {
   assert.equal(run('analyze(ticker, rows, end)'), null);
   assert.throws(() => run('analyze(ticker, rows.slice(1), end)'), /Latest closed candle missing/);
   assert.throws(() => run('analyze(ticker, rows.filter((_, i) => i !== 2), end)'), /Invalid or missing candles/);
+  assert.throws(() => run('analyze(ticker, rows.slice(0, 24), end)'), /Insufficient closed candle history/);
 });
 
 test('a full scan paginates and renders both rankings, then fails closed on quote errors', async () => {
@@ -91,6 +92,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   const events = {};
   const symbols = ['L', 'S'].flatMap(side => Array.from({length: 12}, (_, i) => side + i));
   let mode = 'healthy';
+  let l0Requests = 0;
   let heldCandles;
   let tick;
   class Clock extends Date {
@@ -106,12 +108,13 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
     setInterval: callback => { tick = callback; },
     setTimeout, clearTimeout, AbortController, URL, URLSearchParams, Date: Clock,
     async fetch(url, options) {
-      const {pathname, searchParams: params} = new URL(url);
+      const {hostname, pathname, searchParams: params} = new URL(url);
       const endpoint = pathname.split('/').at(-1);
       const result = {category: 'linear'};
       if (endpoint === 'instruments-info') {
         result.list = (params.has('cursor') ? symbols.slice(12) : symbols.slice(0, 12)).map(symbol =>
-          ({symbol, quoteCoin: 'USDT', settleCoin: 'USDT', contractType: 'LinearPerpetual', status: 'Trading'}));
+          ({symbol, quoteCoin: 'USDT', settleCoin: 'USDT', contractType: 'LinearPerpetual', status: 'Trading',
+            launchTime: mode === 'newly listed' ? String(expectedClose - 300_000) : '1000000000'}));
         result.nextPageCursor = params.has('cursor') ? '' : 'page2';
       } else if (endpoint === 'tickers') {
         if (mode === 'HTTP failure') return {ok: false, status: 503};
@@ -126,6 +129,11 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
       } else {
         assert.equal(endpoint, 'kline');
         const symbol = params.get('symbol');
+        if (symbol === 'L0') l0Requests++;
+        if (mode === 'transient candle error' && symbol === 'L0' && l0Requests === 1) {
+          return {ok: false, status: 503};
+        }
+        if (mode === 'host candle outage' && hostname === 'api.bybit.com') return {ok: false, status: 503};
         if (mode === 'partial' && symbol === 'L0') return {ok: false, status: 503};
         if (heldCandles) {
           await Promise.race([heldCandles, new Promise((_, reject) => {
@@ -283,6 +291,13 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.match(dom.status.textContent, /Scan complete · 24 \/ 24/);
   assert.match(firstVerdict(), /^READY TO REVIEW/);
 
+  mode = 'transient candle error';
+  l0Requests = 0;
+  await dom.scan.onclick();
+  await settle();
+  assert.equal(l0Requests, 2);
+  assert.match(dom.status.textContent, /Scan complete · 24 \/ 24/);
+
   let socket;
   const sent = [];
   app.WebSocket = class {
@@ -303,6 +318,9 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert(sent[0].args.includes('tickers.BTCUSDT'));
   const sendTicker = (type, data, ts = now) =>
     socket.onmessage({data: JSON.stringify({topic: 'tickers.' + symbol, type, ts, data})});
+  const sendReference = () => socket.onmessage({data: JSON.stringify({
+    topic: 'tickers.BTCUSDT', type: 'snapshot', ts: now, data: {bid1Price: '79999', ask1Price: '80001'}
+  })});
   sendTicker('delta', {ask1Price: '101'});
   assert.match(book.children[1].textContent, /^Bybit snapshot/);
   sendTicker('snapshot', {symbol, bid1Price: '100.595', ask1Price: '100.606',
@@ -322,6 +340,7 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   now += 8_000;
   read('updateCards()');
   assert.match(book.children[1].textContent, /^Bybit snapshot/);
+  sendReference();
   now += 17_000;
   read('updateCards()');
   assert.equal(cards().length, 0);
@@ -355,7 +374,24 @@ test('a full scan paginates and renders both rankings, then fails closed on quot
   assert.equal(sent.at(-2).op, 'unsubscribe');
   assert.deepEqual(sent.at(-1), {op: 'subscribe', args: ['tickers.EARLY']});
   assert.equal(read('streamTopics.size'), 100);
-  socket.close();
+  now += 25_000;
+  socket.onmessage({data: JSON.stringify({op: 'ping', success: true})});
+  read('maintainStream()');
+  assert.equal(socket.readyState, 3);
+  assert.equal(read('stream'), null);
+
+  mode = 'host candle outage';
+  read("host = HOSTS[0]; failedHosts.clear()");
+  await dom.scan.onclick();
+  assert.match(dom.status.textContent, /Scan unavailable/);
+  assert.match(dom['reference-time'].textContent, /^Bybit snapshot/);
+  await dom.scan.onclick();
+  assert.match(dom.status.textContent, /Scan complete .* api.bytick.com/);
+  mode = 'newly listed';
+  await dom.scan.onclick();
+  assert.match(dom.status.textContent, /No eligible contracts · 0 \/ 0/);
+  assert.match(dom['reference-time'].textContent, /^Bybit snapshot/);
+  assert.equal(cards().length, 0);
 });
 
 test('GYLEX catalog accepts hundreds of symbols and deduplicates pair formats', () => {

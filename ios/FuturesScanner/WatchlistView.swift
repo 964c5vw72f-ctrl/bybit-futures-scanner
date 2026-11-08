@@ -13,6 +13,7 @@ private struct MarketQuote: Decodable {
 
 private struct MarketSnapshot: Decodable {
     struct Market: Decodable {
+        let category: String
         let list: [MarketQuote]
     }
 
@@ -28,14 +29,27 @@ private struct MarketSnapshot: Decodable {
     }
 
     static func fetch() async throws -> MarketSnapshot {
-        let url = URL(string: "https://api.bybit.com/v5/market/tickers?category=linear")!
-        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 8)
+        for host in ["api.bybit.com", "api.bytick.com", "api.bybit.eu"] {
+            try Task.checkCancellation()
+            do {
+                return try await fetch(from: host)
+            } catch {
+                try Task.checkCancellation()
+            }
+        }
+        throw URLError(.cannotConnectToHost)
+    }
+
+    private static func fetch(from host: String) async throws -> MarketSnapshot {
+        let url = URL(string: "https://\(host)/v5/market/tickers?category=linear")!
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 5)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw URLError(.badServerResponse)
         }
         let snapshot = try JSONDecoder().decode(Self.self, from: data)
-        guard snapshot.retCode == 0, snapshot.isFresh(at: .now), !snapshot.result.list.isEmpty else {
+        guard snapshot.retCode == 0, snapshot.isFresh(at: .now),
+              snapshot.result.category == "linear", !snapshot.result.list.isEmpty else {
             throw URLError(.cannotParseResponse)
         }
         return snapshot
@@ -160,6 +174,7 @@ struct WatchlistView: View {
         do {
             let fresh = try await MarketSnapshot.fetch()
             try Task.checkCancellation()
+            if let snapshot, fresh.time < snapshot.time { return }
             snapshot = fresh
             errorMessage = nil
         } catch {

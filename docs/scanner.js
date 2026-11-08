@@ -2,12 +2,14 @@
 
 const HOSTS = ['https://api.bybit.com', 'https://api.bytick.com', 'https://api.bybit.eu'];
 const CANDLE_MS = 300_000;
+const MIN_CANDLES = 25;
 const CLOSE_GRACE_MS = 10_000;
 const QUOTE_MAX_AGE_MS = 25_000;
 const FUTURE_TOLERANCE_MS = 5_000;
 const QUOTE_INTERVAL_MS = 10_000;
 const LIVE_QUOTE_MAX_AGE_MS = 8_000;
 const STREAM_RETRY_MS = 15_000;
+const STREAM_SILENCE_MS = 25_000;
 const STREAM_TOPIC_LIMIT = 100;
 const STREAM_URL = 'wss://stream.bybit.com/v5/public/linear';
 const MARKET_REFERENCE = 'BTCUSDT';
@@ -42,6 +44,7 @@ let quoteRequest = null;
 let nextScanAt = 0;
 let nextQuoteAt = 0;
 let host = null;
+const failedHosts = new Set();
 let signals = [];
 let visibleSetups = [];
 let scanClose = 0;
@@ -104,7 +107,7 @@ async function api(base, endpoint, params, parentSignal) {
 }
 
 async function universe(base, signal) {
-  const instruments = new Set();
+  const instruments = new Map();
   const cursors = new Set();
   let cursor;
   do {
@@ -115,7 +118,8 @@ async function universe(base, signal) {
       if (row.quoteCoin === 'USDT' && row.settleCoin === 'USDT' &&
           row.contractType === 'LinearPerpetual' && row.status === 'Trading' &&
           (!gylexMode || gylexPairs.has(row.symbol))) {
-        instruments.add(row.symbol);
+        const launch = num(row.launchTime);
+        instruments.set(row.symbol, Number.isSafeInteger(launch) ? launch : 0);
       }
     }
     cursor = page.cursor;
@@ -123,19 +127,21 @@ async function universe(base, signal) {
     cursors.add(cursor);
   } while (cursor);
   const tickers = await api(base, 'tickers', MARKET, signal);
+  if (!tickers.list.length) throw Error('Empty ticker snapshot');
+  const close = Math.floor((tickers.time - 2000) / CANDLE_MS) * CANDLE_MS;
+  const latestEligibleLaunch = close - (MIN_CANDLES - 1) * CANDLE_MS;
   const eligible = new Map(tickers.list
-    .filter(row => instruments.has(row.symbol) && Number.isFinite(num(row.turnover24h)) && num(row.turnover24h) >= 1_000_000)
+    .filter(row => instruments.has(row.symbol) &&
+      instruments.get(row.symbol) < latestEligibleLaunch &&
+      Number.isFinite(num(row.turnover24h)) && num(row.turnover24h) >= 1_000_000)
     .map(row => [row.symbol, row]));
-  if (!eligible.size) {
-    throw Error(gylexMode ? 'No GYLEX watchlist pairs passed the Bybit market filters' :
-      'No eligible USDT perpetuals returned');
-  }
-  return {base, tickers, eligible: [...eligible.values()]};
+  return {base, tickers, close, eligible: [...eligible.values()]};
 }
 
 async function connect(signal) {
   const failures = [];
-  const preferred = [...new Set([host, ...HOSTS].filter(Boolean))];
+  const preferred = [...new Set([host, ...HOSTS].filter(Boolean))]
+    .sort((a, b) => Number(failedHosts.has(a)) - Number(failedHosts.has(b)));
   for (const base of preferred) {
     try {
       return await universe(base, signal);
@@ -192,7 +198,7 @@ function analyze(ticker, rows, close) {
       row.low <= 0 || row.close < row.low || row.close > row.high || row.turnover < 0)) {
     throw Error('Invalid or missing candles');
   }
-  if (candles.length < 25) return null;
+  if (candles.length < MIN_CANDLES) throw Error('Insufficient closed candle history');
 
   const prices = candles.map(row => row.close);
   const volumes = candles.map(row => row.turnover);
@@ -481,7 +487,7 @@ function maintainStream() {
   streamDeadline = now + 8_000;
   socket.onopen = () => {
     if (stream !== socket) return;
-    streamDeadline = Date.now() + 45_000;
+    streamDeadline = Date.now() + STREAM_SILENCE_MS;
     nextPingAt = Date.now() + 20_000;
     syncStreamTopics();
   };
@@ -494,7 +500,6 @@ function maintainStream() {
       return;
     }
     if (!message || typeof message !== 'object') return;
-    streamDeadline = Date.now() + 45_000;
     if ((message.op === 'subscribe' || message.op === 'unsubscribe') && message.success === false) {
       socket.close();
       return;
@@ -505,6 +510,7 @@ function maintainStream() {
     const quote = mergeTicker(streamedQuotes.get(symbol), message);
     if (!quote) return;
     streamedQuotes.set(symbol, quote);
+    if (symbol === MARKET_REFERENCE && readBook(quote.row)) streamDeadline = Date.now() + STREAM_SILENCE_MS;
     if (quotePaint === null) {
       quotePaint = setTimeout(() => {
         quotePaint = null;
@@ -561,6 +567,8 @@ async function refreshQuotes() {
   } catch (error) {
     if (quoteRequest !== request) return;
     if (quoteSnapshot === previousSnapshot) quoteSnapshot = null;
+    failedHosts.add(base);
+    nextScanAt = Math.min(nextScanAt, Date.now() + SCAN_RETRY_MS);
     quoteIssue = 'Bybit quote refresh failed';
     $('quote-warning').textContent = quoteIssue + '. ' + error.message;
   } finally {
@@ -569,6 +577,43 @@ async function refreshQuotes() {
       updateCards();
     }
   }
+}
+
+async function scanCandles(base, eligible, close, request) {
+  const found = [];
+  const failures = new Map();
+  let checked = 0;
+
+  async function scanBatch(batch, retrying) {
+    let next = 0, done = 0;
+    await Promise.all(Array.from({length: Math.min(8, batch.length)}, async () => {
+      while (!request.signal.aborted && next < batch.length) {
+        const ticker = batch[next++];
+        try {
+          const data = await api(base, 'kline', {...MARKET, symbol: ticker.symbol, interval: 5,
+            end: close - 1, limit: 45}, request.signal);
+          if (data.symbol !== ticker.symbol) throw Error('Unexpected candle symbol');
+          const result = analyze(ticker, data.list, close);
+          if (result) found.push(result);
+          failures.delete(ticker);
+          checked++;
+        } catch (error) {
+          failures.set(ticker, ticker.symbol + ' · ' + error.message);
+        }
+        done++;
+        if (!retrying && scanRequest === request && (done === 1 || done % 15 === 0)) {
+          $('status').textContent = 'Scanning ' + done + ' / ' + eligible.length + ' contracts…';
+        }
+      }
+    }));
+  }
+
+  await scanBatch(eligible, false);
+  if (checked && failures.size && !request.signal.aborted) {
+    $('status').textContent = 'Retrying candles for ' + failures.size + ' contracts…';
+    await scanBatch([...failures.keys()], true);
+  }
+  return {found, checked, firstError: failures.values().next().value};
 }
 
 async function scan() {
@@ -581,44 +626,27 @@ async function scan() {
   updateCards();
   const timeout = setTimeout(() => request.abort(), SCAN_TIMEOUT_MS);
   try {
-    const {base, tickers, eligible} = await connect(request.signal);
+    const {base, tickers, close, eligible} = await connect(request.signal);
     if (scanRequest !== request) return;
     if (host !== base && (host || base === 'https://api.bybit.eu')) invalidateQuotes();
     host = base;
     acceptSnapshot(base, tickers);
     nextQuoteAt = Math.max(nextQuoteAt, Date.now() + QUOTE_INTERVAL_MS);
     updateCards();
-    const close = Math.floor((tickers.time - 2000) / CANDLE_MS) * CANDLE_MS;
-    const found = [];
-    let next = 0, done = 0, failures = 0, firstError = '';
-    await Promise.all(Array.from({length: Math.min(8, eligible.length)}, async () => {
-      while (!request.signal.aborted && next < eligible.length) {
-        const ticker = eligible[next++];
-        try {
-          const data = await api(base, 'kline', {...MARKET, symbol: ticker.symbol, interval: 5,
-            end: close - 1, limit: 45}, request.signal);
-          if (data.symbol !== undefined && data.symbol !== ticker.symbol) throw Error('Unexpected candle symbol');
-          const result = analyze(ticker, data.list, close);
-          if (result) found.push(result);
-        } catch (error) {
-          failures++;
-          if (!firstError) firstError = ticker.symbol + ' · ' + error.message;
-        }
-        done++;
-        if (scanRequest === request && (done === 1 || done % 15 === 0)) {
-          $('status').textContent = 'Scanning ' + done + ' / ' + eligible.length + ' contracts…';
-        }
-      }
-    }));
+    const {found, checked, firstError} = await scanCandles(base, eligible, close, request);
     if (scanRequest !== request) return;
-    if (failures === done) throw Error(request.signal.aborted ? 'Candle scan timed out' : firstError);
-    incomplete = failures > 0 || done < eligible.length;
+    if (eligible.length && !checked) {
+      failedHosts.add(base);
+      throw Error(request.signal.aborted ? 'Candle scan timed out' : firstError || 'No candles returned');
+    }
+    incomplete = checked < eligible.length;
+    if (!incomplete && !quoteIssue) failedHosts.delete(base);
     scanClose = close;
     found.sort((a, b) => b.score - a.score || a.symbol.localeCompare(b.symbol));
     signals = found;
     visibleSetups = null;
-    $('status').textContent = (incomplete ? 'Partial scan' : 'Scan complete') + ' · ' +
-      (done - failures) + ' / ' + eligible.length + ' contracts checked · ' + new URL(host).hostname +
+    $('status').textContent = (incomplete ? 'Partial scan' : eligible.length ? 'Scan complete' : 'No eligible contracts') + ' · ' +
+      checked + ' / ' + eligible.length + ' contracts checked · ' + new URL(host).hostname +
       ' · ' + new Date().toLocaleTimeString();
     $('warning').textContent = incomplete ? (firstError || 'Scan timed out') + ' · Results may omit setups.' : '';
     const nextClose = close + CANDLE_MS + 2500;

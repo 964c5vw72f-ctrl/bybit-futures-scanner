@@ -14,31 +14,28 @@ HEADERS = {"User-Agent": "bybit-public-futures-scanner/1.0"}
 TOP_N = int(os.getenv("TOP_N", "0"))
 WORKERS = 12
 
-def get(path, params):
-    """Try official Bybit API domains; never replace blocked data with estimates."""
-    failures = []
-    for base in BASES:
-        url = base + path + "?" + urllib.parse.urlencode(params)
-        try:
-            req = urllib.request.Request(url, headers=HEADERS)
-            with urllib.request.urlopen(req, timeout=12) as response:
-                obj = json.load(response)
-            if obj.get("retCode") != 0:
-                raise RuntimeError(str(obj.get("retMsg")))
-            if abs(time.time() * 1000 - int(obj["time"])) >= 25_000:
-                raise RuntimeError("Stale Bybit response timestamp")
-            return obj["result"]
-        except Exception as exc:
-            failures.append(f"{base}: {type(exc).__name__}: {exc}")
-    raise RuntimeError("All official Bybit API hosts failed. " + " | ".join(failures))
+def get(base, path, params):
+    url = base + path + "?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=12) as response:
+        obj = json.load(response)
+    if obj.get("retCode") != 0:
+        raise RuntimeError(str(obj.get("retMsg")))
+    timestamp = int(obj["time"])
+    if not -5000 <= time.time() * 1000 - timestamp < 25_000:
+        raise RuntimeError("Missing or stale Bybit response timestamp")
+    result = obj["result"]
+    if result.get("category") != "linear" or not isinstance(result.get("list"), list):
+        raise RuntimeError("Unexpected Bybit market response")
+    return result, timestamp
 
-def active_symbols():
+def active_symbols(base):
     found, cursor, seen = set(), None, set()
     while True:
         args = {"category": "linear", "limit": 1000, "status": "Trading"}
         if cursor:
             args["cursor"] = cursor
-        result = get("/v5/market/instruments-info", args)
+        result, _ = get(base, "/v5/market/instruments-info", args)
         for item in result.get("list", []):
             if (item.get("quoteCoin") == "USDT"
                 and item.get("settleCoin") == "USDT"
@@ -53,6 +50,21 @@ def active_symbols():
         seen.add(new_cursor)
         cursor = new_cursor
     return found
+
+def connect():
+    failures = []
+    for base in BASES:
+        try:
+            valid = active_symbols(base)
+            result, timestamp = get(base, "/v5/market/tickers", {"category": "linear"})
+            eligible = [t for t in result["list"] if t["symbol"] in valid
+                        and 1_000_000 <= float(t.get("turnover24h") or 0) < math.inf]
+            if not eligible:
+                raise RuntimeError("No eligible USDT perpetuals returned")
+            return base, eligible, (timestamp - 2000) // CANDLE_MS * CANDLE_MS
+        except Exception as exc:
+            failures.append(f"{base}: {type(exc).__name__}: {exc}")
+    raise RuntimeError("All official Bybit API hosts failed. " + " | ".join(failures))
 
 def rsi(closes, period=14):
     changes = [b - a for a, b in zip(closes, closes[1:])]
@@ -69,11 +81,13 @@ def rsi(closes, period=14):
         return 100.0 if avg_gain else 50.0
     return 100 - 100 / (1 + avg_gain / avg_loss)
 
-def analyze(ticker, candle_close):
+def analyze(base, ticker, candle_close):
     symbol = ticker["symbol"]
-    result = get("/v5/market/kline", {
+    result, _ = get(base, "/v5/market/kline", {
         "category": "linear", "symbol": symbol, "interval": "5", "limit": 45, "end": candle_close - 1
     })
+    if result.get("symbol") != symbol:
+        raise RuntimeError("Unexpected candle symbol")
     rows = sorted(result.get("list", []), key=lambda x: int(x[0]))
     if not rows or int(rows[-1][0]) + CANDLE_MS != candle_close:
         raise RuntimeError("Latest closed candle missing")
@@ -137,14 +151,8 @@ def analyze(ticker, candle_close):
 
 def main():
     started = dt.datetime.now(dt.timezone.utc).isoformat()
-    candle_close = (int(time.time() * 1000) - 2000) // CANDLE_MS * CANDLE_MS
     try:
-        valid = active_symbols()
-        tickers = get("/v5/market/tickers", {"category": "linear"}).get("list", [])
-        eligible = [t for t in tickers if t["symbol"] in valid
-                    and float(t.get("turnover24h") or 0) >= 1000000]
-        if not eligible:
-            raise RuntimeError("No eligible USDT perpetuals returned")
+        base, eligible, candle_close = connect()
     except Exception as exc:
         report = {
             "generated_utc": started, "source": "Bybit public V5 REST API",
@@ -163,7 +171,7 @@ def main():
     candidates = eligible[:TOP_N] if TOP_N > 0 else eligible
     results, errors = [], []
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        jobs = {pool.submit(analyze, t, candle_close): t["symbol"] for t in candidates}
+        jobs = {pool.submit(analyze, base, t, candle_close): t["symbol"] for t in candidates}
         for future in concurrent.futures.as_completed(jobs):
             try:
                 item = future.result()
@@ -175,7 +183,7 @@ def main():
     ranked = [item for side in ("LONG", "SHORT")
               for item in [row for row in results if row["side"] == side][:10]]
     report = {
-        "generated_utc": started, "source": "Bybit public V5 REST API",
+        "generated_utc": started, "source": "Bybit public V5 REST API", "market_host": base,
         "market": "USDT linear perpetual", "eligible_symbols": len(eligible),
         "scanned_symbols": len(candidates) - len(errors), "signals": ranked,
         "errors": errors, "scan_status": "FAILED" if errors and len(errors) == len(candidates) else ("PARTIAL" if errors else "OK"), "disclaimer": "Watchlist only; not a trade instruction. "
